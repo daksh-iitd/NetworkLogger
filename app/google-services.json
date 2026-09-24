@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1083019422395",
+    "project_id": "android-telecom-monitoring",
+    "storage_bucket": "android-telecom-monitoring.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1083019422395:android:08219478e51d347124179e",
+        "android_client_info": {
+          "package_name": "com.example.networklogger"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAulLA7tYU5ueMnkh-Pbmn3H1ZDv1dGweg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
