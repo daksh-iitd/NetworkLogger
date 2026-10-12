@@ -94,6 +94,10 @@ class LoggingService : Service() {
     private var currentRSRQ = "N/A"
     private var currentSINR = "N/A"
     private var currentNeighborCount = "0"
+    private var currentBand = BandInfo.UNKNOWN
+    // On 5G NSA the serving (registered) cell is the LTE anchor; the NR leg, when
+    // the modem reports it at all, shows up as an unregistered CellInfoNr.
+    private var currentNrLegBand = "N/A"
     private var currentDlKbps = "N/A"
     private var currentUlKbps = "N/A"
     private var lastRxBytes = -1L
@@ -152,6 +156,7 @@ class LoggingService : Service() {
         if (isRunning) return
         isRunning = true
         loggingStartTime = System.currentTimeMillis()
+        LogStorage.beginSession(this, loggingStartTime)
         startForegroundCompat(buildNotification("Starting..."))
         broadcastStatus(true)
         getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
@@ -177,10 +182,23 @@ class LoggingService : Service() {
             .putBoolean(MainActivity.KEY_SESSION_ACTIVE, false)
             .apply()
         stopBackgroundMonitoring()
-        updateNotification("Uploading logs...")
-        uploadLogsToFirebaseStorage {
+        // Branch on the mode this session was *started* in, not the current toggle.
+        // Dev sessions were written straight into their own timestamped folder, so
+        // there's nothing to move and nothing that a later production Stop could upload.
+        if (LogStorage.isDevSession(this)) {
+            Toast.makeText(
+                applicationContext,
+                "Dev mode: logs saved to ${LogStorage.devSessionFolder(this)}",
+                Toast.LENGTH_LONG
+            ).show()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
+        } else {
+            updateNotification("Uploading logs...")
+            uploadLogsToFirebaseStorage {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
         }
     }
 
@@ -456,6 +474,9 @@ class LoggingService : Service() {
             cellInfoDisplay = "Cell Info: Location permission required."
             return
         }
+        // Reset so a failed read never carries the previous cell's band into this row
+        currentBand = BandInfo.UNKNOWN
+        currentNrLegBand = "N/A"
         try {
             val cellInfos = telephonyManager.allCellInfo
             if (cellInfos.isNullOrEmpty()) {
@@ -486,9 +507,18 @@ class LoggingService : Service() {
                     currentRSRQ = if (signal.rsrq == Int.MAX_VALUE) "N/A" else signal.rsrq.toString()
                     currentSINR = "N/A"
                     currentNeighborCount = cellInfos.size.toString()
+                    currentBand = BandInfo.of(identity)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        cellInfos.firstOrNull { it is CellInfoNr && !it.isRegistered }?.let {
+                            currentNrLegBand = BandInfo.of((it as CellInfoNr).cellIdentity as CellIdentityNr).band
+                        }
+                    }
+                    val bandwidth = currentBand.bandwidthMhz?.let { " · %.0f MHz".format(it) } ?: ""
+                    val nrLeg = if (currentNrLegBand != "N/A") "\n5G NSA leg: $currentNrLegBand" else ""
                     cellInfoDisplay =
                         "MCC: ${identity.mccString}\nMNC: ${identity.mncString}\n" +
                                 "CID: $localCellId (eNB: $enbId, ECI: $eci)\nTAC: ${identity.tac}\n" +
+                                "Band: ${currentBand.band}$bandwidth$nrLeg\n" +
                                 "EARFCN: ${identity.earfcn}\nRSRP: $rsrp dBm\nRSRQ: $rsrq"
                 }
                 is CellInfoNr -> {
@@ -514,6 +544,7 @@ class LoggingService : Service() {
                     currentRSRQ = rsrq.replace(" dB", "")
                     currentSINR = snr.replace(" dB", "")
                     currentNeighborCount = cellInfos.size.toString()
+                    currentBand = BandInfo.of(identity)
 
                     val neighborDetails = StringBuilder()
                     for ((index, info) in cellInfos.withIndex()) {
@@ -532,7 +563,7 @@ class LoggingService : Service() {
                         }
                     }
                     cellInfoDisplay =
-                        "5G Cell\nNCI: ${identity.nci}\nPCI: ${identity.pci}\n" +
+                        "5G Cell\nBand: ${currentBand.band}\nNCI: ${identity.nci}\nPCI: ${identity.pci}\n" +
                                 "TAC: ${identity.tac}\nRSRP: ${signal.dbm} dBm\n" +
                                 "MCC: ${identity.mccString}\nMNC: ${identity.mncString}\n" +
                                 "Operator: $currentOperator\nNRARFCN: ${identity.nrarfcn}\n" +
@@ -573,59 +604,16 @@ class LoggingService : Service() {
         val screenState = if (isScreenOn()) "ON" else "OFF"
         val logLine = "$time,$currentLat,$currentLon,$currentNetwork,$currentSignal," +
                 "$currentOperator,$currentMCC,$currentMNC,$currentPCI,$currentTAC,$currentNCI," +
-                "$currentRSRP,$currentRSRQ,$currentSINR,$currentNeighborCount,$currentDlKbps,$currentUlKbps,$screenState\n"
-        val header = "time,lat,lon,network,signal,operator,mcc,mnc,pci,tac,nci,rsrp,rsrq,sinr,neighborCount,dlKbps,ulKbps,screenOn\n"
+                "$currentRSRP,$currentRSRQ,$currentSINR,$currentNeighborCount,$currentDlKbps,$currentUlKbps,$screenState," +
+                "${currentBand.arfcn ?: "N/A"},${currentBand.band},${currentBand.source}," +
+                "${currentBand.bandwidthMhz ?: "N/A"},$currentNrLegBand\n"
+        // New columns go at the end so readers that select columns by name keep working
+        val header = "time,lat,lon,network,signal,operator,mcc,mnc,pci,tac,nci,rsrp,rsrq,sinr,neighborCount," +
+                "dlKbps,ulKbps,screenOn,arfcn,band,bandSource,bandwidthMHz,nrLegBand\n"
         try {
-            val fileName = "network_logs.csv"
-            val resolver = contentResolver
-            val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            val existingUri: Uri? = resolver.query(
-                collection,
-                arrayOf(MediaStore.Downloads._ID),
-                "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.IS_PENDING} = 0",
-                arrayOf(fileName), null
-            )?.use { cursor ->
-                if (cursor.moveToFirst())
-                    ContentUris.withAppendedId(
-                        collection,
-                        cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID))
-                    )
-                else null
-            }
-            if (existingUri != null) {
-                val stream = resolver.openOutputStream(existingUri, "wa")
-                if (stream != null) {
-                    stream.use { it.write(logLine.toByteArray()) }
-                } else {
-                    resolver.delete(existingUri, null, null)
-                    createNewCsvFile(resolver, collection, fileName, header, logLine)
-                }
-            } else {
-                createNewCsvFile(resolver, collection, fileName, header, logLine)
-            }
+            LogStorage.appendRow(this, "network_logs", header, logLine)
         } catch (e: Exception) {
             Log.e("CSV", "saveLog() failed: ${e.message}", e)
-        }
-    }
-
-    private fun createNewCsvFile(
-        resolver: android.content.ContentResolver,
-        collection: Uri,
-        fileName: String,
-        header: String,
-        firstRow: String
-    ) {
-        val contentValues = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-            put(MediaStore.Downloads.MIME_TYPE, "text/csv")
-            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-        }
-        val uri = resolver.insert(collection, contentValues)
-        if (uri != null) {
-            resolver.openOutputStream(uri)?.use { it.write(header.toByteArray()); it.write(firstRow.toByteArray()) }
-            Log.d("CSV", "Created new file: $uri")
-        } else {
-            Log.e("CSV", "Failed to insert new file into MediaStore")
         }
     }
 

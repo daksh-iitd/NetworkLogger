@@ -1,6 +1,6 @@
 # NetworkLogger 📡
 
-An Android application for real-time telecom network and device monitoring. It captures cell tower parameters, GPS location, signal strength, and device health metrics — saving everything as CSV files directly in the phone's Downloads folder.
+An Android application for real-time telecom network and device monitoring. It captures cell tower parameters (including the **frequency band**), GPS location, signal strength, throughput, and device health metrics every 5 seconds — keeping logs on the phone (developer mode) or uploading each session to Firebase Storage (production mode).
 
 > Developed for academic and research purposes at **IIT Delhi**
 
@@ -13,9 +13,12 @@ An Android application for real-time telecom network and device monitoring. It c
 
 - [Motivation](#motivation)
 - [What the App Does](#what-the-app-does)
+- [Developer Mode vs Production Mode](#developer-mode-vs-production-mode)
+- [Build Variants (internal vs public)](#build-variants-internal-vs-public)
 - [Project Structure](#project-structure)
 - [Architecture](#architecture)
 - [Features](#features)
+- [Band Detection](#band-detection)
 - [Tech Stack & APIs](#tech-stack--apis)
 - [CSV Output Format](#csv-output-format)
 - [Setup & Installation](#setup--installation)
@@ -23,6 +26,7 @@ An Android application for real-time telecom network and device monitoring. It c
 - [Root Detection](#root-detection)
 - [Known Behaviours](#known-behaviours)
 - [Problems Solved](#problems-solved-during-development)
+- [Data Pipeline & Analysis](#data-pipeline--analysis)
 - [Testing](#testing)
 - [Future Scope](#future-scope)
 
@@ -44,17 +48,48 @@ NetworkLogger was developed to solve these problems — providing a free, lightw
 
 ## What the App Does
 
-NetworkLogger runs two independent logging systems simultaneously:
+NetworkLogger runs two logging pipelines:
 
-**Foreground Logging (manual)**  
-The user taps **START LOGGING** and the app records network + GPS data every 5 seconds into `network_logs.csv`.
+**Session logging (foreground service, every 5 s)**  
+The user taps **START LOGGING**. `LoggingService` — a real foreground service with a persistent notification — samples GPS, the serving cell (ID, band, RSRP/RSRQ/SINR), network type, and throughput every 5 seconds into `network_logs`. Because it is a foreground service, logging keeps running while the app is in the background (e.g. during a browsing or streaming test).
 
-**Background Logging (automatic)**  
-A background worker runs every 15 minutes automatically — even when the app is closed — saving device health data into `background_logs.csv`.
+**Background monitoring (WorkManager, every 15 min)**  
+While a session is active, `NetworkWorker` records device health (battery, RAM, storage) and coarse network data into `background_logs`. It also acts as a **watchdog**: if a session claims to be active but has not logged for 10 minutes (the OS killed it), it posts a notification so the tester can restart.
 
-Both files are saved to `/storage/emulated/0/Download/` and are immediately visible in the phone's Files app without any special access.
+On **STOP LOGGING**, what happens to the files depends on the mode (below). The app works on both **rooted and non-rooted** Android devices; root access is not required.
 
-The app works on both **rooted and non-rooted** Android devices. Root access is not required.
+---
+
+## Developer Mode vs Production Mode
+
+| | Developer mode | Production mode |
+|---|---|---|
+| Where logs go | Stay on the phone | Uploaded to Firebase Storage on Stop |
+| File location | `Download/NetworkLogger/session_<start time>/network_logs_<start time>.csv` (+ `background_logs_…`) | `Download/network_logs.csv`, `Download/background_logs.csv` (deleted after a successful upload) |
+| App colours | Amber / brown, "DEVELOPER MODE" banner | Original navy / indigo |
+| Default | **On** for a fresh install | — |
+
+- Switch with the button in the mode bar under the header. Switching is blocked while a session is running.
+- The mode is **captured when a session starts**; Stop acts on that mode, not on the toggle's current position. Developer sessions write straight into their own timestamped folder and never touch the production files, so dev data can never be uploaded later.
+- Uploads go to `logs/<firebase uid>/<ANDROID_ID>/<sessionId>/` with metadata (tester name, device model, manufacturer, Android version, app version). **`sessionId` is the upload time, i.e. the end of the session.**
+
+---
+
+## Build Variants (internal vs public)
+
+The app has two product flavors (`app/build.gradle.kts`), sharing one package name (`google-services.json` is registered for it):
+
+| Flavor | Developer mode | Use |
+|---|---|---|
+| `internal` | Available (toggle shown) | Research phones, scripted experiments |
+| `public` | Removed — mode bar hidden, always production | APK to share with ordinary users |
+
+```bash
+./gradlew :app:assembleInternalDebug     # app/build/outputs/apk/internal/debug/
+./gradlew :app:assemblePublicRelease     # app/build/outputs/apk/public/release/
+```
+
+In Android Studio: **Build → Select Build Variant**. The public release is currently signed with the local debug key — fine for sharing with a few testers; switch to a dedicated release keystore before wide or Play Store distribution (users can't update across a signing-key change). Only one flavor can be installed on a phone at a time. Experiment scripts that tap Start/Stop by screen coordinates expect the **internal** build's layout.
 
 ---
 
@@ -63,31 +98,25 @@ The app works on both **rooted and non-rooted** Android devices. Root access is 
 ```
 NetworkLogger/
 │
-├── README.md
-├── CHANGELOG.md
-├── ROADMAP.md
-├── CONTRIBUTING.md
+├── README.md · CHANGELOG.md · ROADMAP.md · CONTRIBUTING.md · setupGUIDE.md
 │
 ├── app/
-│   └── src/main/
-│       ├── java/com/example/networklogger/
-│       │   ├── MainActivity.kt        ← Main screen, UI, foreground logging
-│       │   └── NetworkWorker.kt       ← Background worker, device monitoring
-│       ├── res/
-│       │   ├── layout/
-│       │   │   └── activity_main.xml  ← App UI layout
-│       │   ├── drawable/
-│       │   │   ├── badge_green.xml    ← Green badge for Non-Rooted status
-│       │   │   ├── badge_red.xml      ← Red badge for Rooted status
-│       │   │   └── badge_amber.xml    ← Amber badge for signal display
-│       │   └── values/
-│       │       └── themes.xml         ← App theme (Material3)
-│       └── AndroidManifest.xml        ← Permissions + service declarations
+│   ├── build.gradle.kts               ← SDK versions, flavors (internal/public), dependencies
+│   ├── google-services.json           ← Firebase project config
+│   └── src/
+│       ├── main/
+│       │   ├── java/com/example/networklogger/
+│       │   │   ├── MainActivity.kt    ← UI, permissions, dev-mode toggle & colours, root detection
+│       │   │   ├── LoggingService.kt  ← Foreground service: 5 s sampling, upload on Stop
+│       │   │   ├── NetworkWorker.kt   ← 15 min device-health logging + session watchdog
+│       │   │   ├── LogStorage.kt      ← Where each session's CSV rows go (dev folder vs Downloads)
+│       │   │   └── BandInfo.kt        ← Serving-cell band from getBands() or EARFCN/NR-ARFCN tables
+│       │   ├── res/layout/activity_main.xml
+│       │   └── AndroidManifest.xml
+│       └── test/.../BandInfoTest.kt   ← Unit tests for the channel → band lookup
 │
-└── screenshots/
-    ├── home_screen.png
-    ├── cell_info_5g.png
-    └── logs.png
+├── grafana_pipeline/                  ← Firebase → InfluxDB → Grafana (see its README)
+└── presentation_charts/               ← Analysis scripts and charts (see its README)
 ```
 
 ---
@@ -95,104 +124,76 @@ NetworkLogger/
 ## Architecture
 
 ```
-                        User
-                          │
+            User ──► MainActivity (UI, mode toggle, permissions)
+                          │ Start / Stop
                           ▼
-                    MainActivity
-                          │
-           ┌──────────────┴──────────────┐
-           │                             │
-           ▼                             ▼
-    FusedLocationClient           TelephonyManager
-    (GPS coordinates)         (Cell info, signal, network)
-           │                             │
-           └──────────────┬──────────────┘
+                   LoggingService  (foreground service, every 5 s)
+          ┌───────────────┼──────────────────────────┐
+          ▼               ▼                          ▼
+ FusedLocationClient  TelephonyManager          TrafficStats
+   (GPS fix)          allCellInfo → serving     (DL/UL kbps)
+                      cell, BandInfo, RSRP…
+          └───────────────┼──────────────────────────┘
                           ▼
-                  updateMeasurements()
-                     every 5 sec
+              LogStorage.appendRow("network_logs")
                           │
-                          ▼
-                   saveLog() → network_logs.csv
-                   (MediaStore Downloads API)
+            dev session ──┴── production session
+                 │                    │
+   Download/NetworkLogger/      Download/network_logs.csv
+     session_<start>/                 │ on Stop
+                                      ▼
+                           Firebase Storage (anonymous auth)
 
-                          │
-                          ▼
-
-                     WorkManager
-                          │
-              ┌───────────┴────────────┐
-              │                        │
-              ▼                        ▼
-    OneTimeWorkRequest        PeriodicWorkRequest
-    (fires on app launch)     (every 15 minutes)
-              │                        │
-              └───────────┬────────────┘
-                          ▼
-                   NetworkWorker
-                          │
-                          ▼
-              saveBackgroundLog() → background_logs.csv
-              (MediaStore Downloads API)
+   While a session runs:  WorkManager (every 15 min) ──► NetworkWorker
+                          ├─ LogStorage.appendRow("background_logs")
+                          └─ watchdog: session silent > 10 min → notification
 ```
 
 ---
 
 ## Features
 
-### Telecom Features (network_logs.csv)
+### Telecom Features (network_logs)
 
-- **GPS location tracking** — latitude, longitude, altitude, speed, accuracy
-- **Network type detection** — 2G / 3G / 4G / 5G
+- **GPS location** — latitude, longitude (altitude, speed, accuracy shown on screen)
+- **Network type** — 2G / 3G / 4G / 4G (CA) / 4G (Advanced Pro) / 5G (NSA) / 5G, using `TelephonyDisplayInfo` so 5G NSA isn't misreported as plain 4G
+- **Serving-cell band** — e.g. `B3`, `B41`, `n28`, `n78`, plus channel number and LTE channel width ([Band Detection](#band-detection))
 - **Signal strength** — RSRP-based labels (Very Weak → Very Strong)
+- **Throughput** — downlink / uplink kbps from `TrafficStats` (all traffic on the phone, not a speed test)
+- **Screen state** — whether the screen was on for each sample
 
-**LTE (4G) cell parameters:**
+**LTE (4G) cell parameters:** MCC, MNC, PCI, TAC, local Cell ID (from ECI = 256 × eNB ID + Cell ID), EARFCN, band, bandwidth, RSRP, RSRQ  
+**5G NR cell parameters:** MCC, MNC, NCI (36-bit), PCI, TAC, NR-ARFCN, band, SS-RSRP, SS-RSRQ, SS-SINR
 
-| Parameter | Description |
-|-----------|-------------|
-| MCC | Mobile Country Code |
-| MNC | Mobile Network Code |
-| CID | Cell Identity |
-| PCI | Physical Cell Identifier |
-| TAC | Tracking Area Code |
-| EARFCN | E-UTRA Absolute Radio Frequency Channel Number |
-| RSRP | Reference Signal Received Power |
-| RSRQ | Reference Signal Received Quality |
+### Device Monitoring Features (background_logs)
 
-**5G NR cell parameters:**
+- Battery percentage, network type, operator, signal level, Cell ID, TAC
+- Storage and RAM — total / used / free in GB
+- Screen state
+- Runs every 15 minutes while a session is active
 
-| Parameter | Description |
-|-----------|-------------|
-| NCI | NR Cell Identity (36-bit) |
-| PCI | Physical Cell Identifier (0-1007) |
-| TAC | Tracking Area Code |
-| NRARFCN | NR Absolute Radio Frequency Channel Number |
-| SS-RSRP | Synchronization Signal RSRP |
-| SS-RSRQ | Synchronization Signal RSRQ |
-| SS-SINR | Signal to Interference plus Noise Ratio |
+### Reliability Features
 
-- **Neighbor cell detection** — captures handover events when phone switches towers
-- **Logging duration timer** — HH:MM:SS display
-- **Start / Stop logging buttons**
-
----
-
-### Device Monitoring Features (background_logs.csv)
-
-- Battery percentage
-- Network type and operator name
-- Signal level in dBm
-- Storage usage — Total / Used / Free in GB (decimal precision)
-- RAM usage — Total / Used / Available in GB (decimal precision)
-- Runs every 15 minutes via WorkManager
-- Also fires once immediately on every app launch
-
----
+- Foreground service keeps 5 s sampling alive when the app is backgrounded or the screen is off
+- Session watchdog notification if the OS kills logging
+- Header check: if an old-format CSV is found (different columns), it is renamed `<name>_old-format_<time>.csv` instead of being appended to
 
 ### Security Features
 
-- Root detection using **7 independent methods**
-- Shows "Rooted" (red badge) or "Non-Rooted" (green badge) in the UI header
-- Device card shows which specific detection method triggered
+- Root detection using **7 independent methods**, shown as a red / green badge with the triggering method
+
+---
+
+## Band Detection
+
+Implemented in [`BandInfo.kt`](app/src/main/java/com/example/networklogger/BandInfo.kt), called on every sample for the serving (registered) cell:
+
+1. **Reported band (preferred).** On Android 11+ (API 30), `CellIdentityLte.getBands()` / `CellIdentityNr.getBands()` return the band from the modem via the radio HAL. Logged with `bandSource = reported`.
+2. **Fallback from the channel number.** Some devices return an empty array, so the EARFCN / NR-ARFCN is mapped through the 3GPP downlink tables (TS 36.101 Table 5.7.3-1 for LTE, TS 38.104 Table 5.4.2.3-1 for NR). Logged with `bandSource = arfcn`.
+3. **Overlapping NR bands** (e.g. n78 inside n77) are never guessed: all candidates are logged, narrowest first, e.g. `n78/n77`.
+4. **5G NSA:** the registered cell is the LTE anchor, so `band` is the anchor's band. If the modem also lists the NR leg (as an unregistered `CellInfoNr`), its band is logged in `nrLegBand`; many devices don't, and it stays `N/A`.
+
+Field tests (Oct 2026) on Samsung, Motorola, Nothing and moto phones returned the band via `getBands()` on every sample.
 
 ---
 
@@ -202,56 +203,28 @@ NetworkLogger/
 
 | API | Purpose |
 |-----|---------|
-| `TelephonyManager.allCellInfo` | Reads all visible cell towers (serving + neighbors) |
-| `CellInfoLte` / `CellIdentityLte` / `CellSignalStrengthLte` | LTE cell parameters |
-| `CellInfoNr` / `CellIdentityNr` / `CellSignalStrengthNr` | 5G NR cell parameters |
-| `TelephonyCallback` (API 31+) | Signal strength listener for Android 12+ |
-| `PhoneStateListener` (deprecated, API < 31) | Signal strength listener for older Android |
-| `telephonyManager.requestCellInfoUpdate()` | Forces fresh cell info from modem |
+| `TelephonyManager.allCellInfo` | All visible cells; the serving cell is the one with `isRegistered` |
+| `CellInfoLte` / `CellIdentityLte` / `CellSignalStrengthLte` | LTE parameters, `earfcn`, `bands`, `bandwidth` |
+| `CellInfoNr` / `CellIdentityNr` / `CellSignalStrengthNr` | 5G NR parameters, `nrarfcn`, `bands`; `getDbm()` = SS-RSRP |
+| `TelephonyCallback.DisplayInfoListener` (API 31+) / `PhoneStateListener` | `TelephonyDisplayInfo` to detect 5G NSA / LTE-CA |
+| `TelephonyCallback.SignalStrengthsListener` | Live signal label while not logging |
+| `requestCellInfoUpdate()` | Fresh cell info before the background worker reads it |
 
-### Location APIs
-
-| API | Purpose |
-|-----|---------|
-| `FusedLocationProviderClient` | Google Play Services GPS — combines GPS, WiFi, cell signals |
-| `getCurrentLocation(PRIORITY_HIGH_ACCURACY)` | One-shot fresh GPS fix per cycle |
-
-### Background Work APIs
+### Location, Background Work, Storage
 
 | API | Purpose |
 |-----|---------|
-| `WorkManager` | Schedules reliable background tasks that survive app kill |
-| `OneTimeWorkRequestBuilder` | Fires worker immediately on app launch |
-| `PeriodicWorkRequestBuilder` (15 min) | Repeating background schedule |
-| `CoroutineWorker` | Worker base class with coroutine/suspend support |
-| `setForeground(ForegroundInfo)` | Keeps worker alive on OEM phones with aggressive killing |
-| `ExistingPeriodicWorkPolicy.UPDATE` | Replaces old schedule when app is reopened |
-
-### File Storage APIs
-
-| API | Purpose |
-|-----|---------|
-| `MediaStore.Downloads` | Saves CSV to Downloads folder (Android 10+ standard) |
-| `ContentResolver.openOutputStream(uri, "wa")` | Appends rows to existing file |
-| `IS_PENDING = 0` filter in query | Prevents duplicate file creation |
-| `ContentResolver.insert()` | Creates new file entry in MediaStore |
-| `ContentUris.withAppendedId()` | Builds URI from MediaStore row ID |
-
-### Device Monitoring APIs
-
-| API | Purpose |
-|-----|---------|
-| `ActivityManager.MemoryInfo` | Total, used, and available RAM |
-| `StatFs(Environment.getDataDirectory())` | Total, used, and free storage |
-| `BatteryManager` via `ACTION_BATTERY_CHANGED` | Battery percentage |
-| `PowerManager.isIgnoringBatteryOptimizations` | Checks if app has battery exemption |
+| `FusedLocationProviderClient.getCurrentLocation(PRIORITY_HIGH_ACCURACY)` | Fresh GPS fix each sample |
+| Foreground `Service` (`location` + `dataSync` types) | 5 s sampling loop that survives backgrounding |
+| `WorkManager` periodic (15 min) + one-time request | Background device-health logging and watchdog |
+| `TrafficStats.getTotalRx/TxBytes` | Throughput between samples |
+| `MediaStore.Downloads` with `RELATIVE_PATH` | Writes CSVs into Downloads or `Download/NetworkLogger/session_…/` |
+| Firebase Storage + Firebase Auth (anonymous) | Uploading production sessions with metadata |
 
 ### SDK Configuration
 
 ```
-compileSdk = 36
-targetSdk  = 36
-minSdk     = 24
+compileSdk = 36 · targetSdk = 36 · minSdk = 24 · JDK 11
 ```
 
 ### Dependencies
@@ -262,61 +235,61 @@ implementation("com.google.android.gms:play-services-location:21.0.1")
 implementation("androidx.work:work-runtime-ktx:2.9.0")
 implementation("androidx.cardview:cardview:1.0.0")
 implementation("com.google.android.material:material:1.11.0")
+implementation(platform("com.google.firebase:firebase-bom:33.13.0"))
+implementation("com.google.firebase:firebase-storage-ktx")
+implementation("com.google.firebase:firebase-auth-ktx")
 ```
 
 ---
 
 ## CSV Output Format
 
-### network_logs.csv
+### network_logs
 
-Recorded every **5 seconds** while Start Logging is active.
-
-| Column | Description |
-|--------|-------------|
-| `time` | Timestamp HH:mm:ss |
-| `lat` | GPS Latitude (7 decimal places) |
-| `lon` | GPS Longitude (7 decimal places) |
-| `network` | 2G / 3G / 4G / 5G |
-| `signal` | Very Weak / Weak / Medium / Strong / Very Strong |
-| `operator` | Operator name (JIO, airtel, etc.) |
-| `pci` | Physical Cell Identifier |
-| `tac` | Tracking Area Code |
-| `nci` | NR Cell Identity (5G) or Cell ID (4G) |
-| `rsrp` | Signal power in dBm |
-| `rsrq` | Signal quality in dB |
-| `sinr` | Signal-to-noise ratio in dB (5G only, N/A for 4G) |
-| `neighborCount` | Number of visible cell towers |
-
-**Example row (JIO 5G, Delhi):**
-```
-15:32:13,28.5451308,77.1971345,5G,Medium,JIO,529,21,4328783889,-93,-7,8,4
-```
-
----
-
-### background_logs.csv
-
-Recorded automatically every **15 minutes** regardless of app state.
+Recorded every **5 seconds** while logging is active. Columns are appended at the end when new fields are added, so scripts that select columns by name keep working.
 
 | Column | Description |
 |--------|-------------|
-| `Time` | Timestamp yyyy-MM-dd HH:mm:ss |
-| `Battery` | Battery percentage (0-100) |
-| `NetworkType` | 2G / 3G / 4G / 5G / No Permission |
-| `Operator` | Operator name |
-| `SignalLevel` | RSRP in dBm (e.g. -95 dBm) |
-| `TotalStorage` | Total internal storage in GB (decimal) |
-| `UsedStorage` | Used storage in GB (decimal) |
-| `FreeStorage` | Free storage in GB (decimal) |
-| `TotalRAM` | Total RAM in GB (decimal) |
-| `UsedRAM` | Used RAM in GB (decimal) |
-| `AvailableRAM` | Available RAM in GB (decimal) |
+| `time` | `HH:mm:ss` (the date comes from the session — see note below) |
+| `lat`, `lon` | GPS latitude / longitude (7 decimals) |
+| `network` | 2G / 3G / 4G / 4G (CA) / 4G (Advanced Pro) / 5G (NSA) / 5G / Unknown |
+| `signal` | Very Weak / Weak / Medium / Strong / Very Strong (from RSRP) |
+| `operator` | Operator name as shown by the phone |
+| `mcc`, `mnc` | Mobile country / network code (405-8xx = Jio, 404-11 = Vi) |
+| `pci`, `tac` | Physical Cell ID, Tracking Area Code |
+| `nci` | NR Cell Identity (5G) or local Cell ID 0–255 (4G) |
+| `rsrp` | dBm — LTE RSRP, or SS-RSRP on a 5G serving cell |
+| `rsrq` | dB |
+| `sinr` | dB — 5G only, `N/A` on 4G |
+| `neighborCount` | Number of cells the phone currently sees |
+| `dlKbps`, `ulKbps` | Throughput of all phone traffic since the previous sample |
+| `screenOn` | `ON` / `OFF` |
+| `arfcn` | EARFCN (4G) or NR-ARFCN (5G) |
+| `band` | e.g. `B3`, `B41`, `n78`; `n78/n77` when only the channel table was available and bands overlap |
+| `bandSource` | `reported` (phone's `getBands()`) or `arfcn` (derived) |
+| `bandwidthMHz` | LTE channel width (Android 9+) |
+| `nrLegBand` | 5G NSA only: band of the NR leg when the phone reports it |
 
-**Example row (Airtel 4G):**
+**Example row (Vi 4G, Delhi — real sample, position rounded):**
 ```
-2026-07-01 15:34:15,23,4G,airtel,-95 dBm,50.43,27.88,22.54,3.70,2.76,0.93
+17:25:13,28.5450,77.1901,4G,Strong,Vi India,404,011,489,52506,21,-83,-16,N/A,1,350.1,19.2,OFF,1421,B3,reported,N/A,N/A
 ```
+`bandwidthMHz` is `N/A` here because this phone (Samsung, Android 12) doesn't report the LTE channel width.
+
+> **Timestamps:** rows only carry `HH:mm:ss`. The uploaded `sessionId` (`yyyyMMdd_HHmmss`) is stamped at **upload — the end of the session** — so reconstruct dates by anchoring the last row on that date and walking backwards.
+
+### background_logs
+
+| Column | Description |
+|--------|-------------|
+| `Time` | `yyyy-MM-dd HH:mm:ss` |
+| `Battery` | 0–100 |
+| `NetworkType`, `Operator` | 2G–5G / `No Permission`; operator name |
+| `SignalLevel` | RSRP in dBm |
+| `CellID`, `TAC` | Serving cell |
+| `TotalStorage`, `UsedStorage`, `FreeStorage` | GB |
+| `TotalRAM`, `UsedRAM`, `AvailableRAM` | GB |
+| `ScreenOn` | `ON` / `OFF` |
 
 ---
 
@@ -324,56 +297,39 @@ Recorded automatically every **15 minutes** regardless of app state.
 
 ### Requirements
 
-- Android Studio (latest stable)
-- Android phone with API 24+ (Android 7.0 or above)
-- JDK 11
-- Physical Android device (emulators do not return real cell data)
+- Android Studio (latest stable), JDK 11
+- Physical Android phone, API 24+ (emulators don't return real cell data)
 
 ### Steps to Run
 
 ```bash
-# 1. Clone the repository
-git clone <repository-url>
-
-# 2. Open in Android Studio
-# File → Open → select the NetworkLogger folder
-
-# 3. Let Gradle sync complete
-
-# 4. Connect Android phone via USB
-# Enable Developer Options → USB Debugging on the phone
-
-# 5. Click Run ▶ in Android Studio
+git clone https://github.com/daksh-iitd/NetworkLogger.git
+# Android Studio → File → Open → the project folder → let Gradle sync
+# Build → Select Build Variant → internalDebug (research) or publicRelease (sharing)
+# Connect the phone with USB debugging enabled → Run ▶
 ```
+
+See [setupGUIDE.md](setupGUIDE.md) for a step-by-step walkthrough.
 
 ### First Launch Checklist
 
-When the app opens for the first time:
-
-1. Tap **Allow** on the Location permission dialog
-2. Tap **Allow** on the Phone permission dialog
-3. Tap **Allow** on the battery optimization exemption dialog
-4. Go to **Settings → Apps → NetworkLogger → Battery → No Restrictions**
-5. Search **Autostart** in Settings and enable it for NetworkLogger (Realme / Xiaomi / OPPO phones)
-
-### Generate Release APK
-
-```
-Build → Generate Signed Bundle/APK → APK → Choose keystore → Release → Build
-```
+1. Allow **Location** and **Phone** permissions (and **Notifications** on Android 13+)
+2. Allow the battery-optimisation exemption
+3. **Settings → Apps → NetworkLogger → Battery → No Restrictions**
+4. Enable **Autostart** for NetworkLogger (Realme / Xiaomi / OPPO / OnePlus)
+5. Enter a tester name and tap **Save** (goes into upload metadata)
+6. Internal build only: choose Developer or Production mode
 
 ### File Locations on Device
 
 ```
-/storage/emulated/0/Download/network_logs.csv
-/storage/emulated/0/Download/background_logs.csv
+Developer mode:  /storage/emulated/0/Download/NetworkLogger/session_<start time>/
+Production mode: /storage/emulated/0/Download/network_logs.csv
+                 /storage/emulated/0/Download/background_logs.csv   (until uploaded)
 ```
 
-Pull files to your computer via ADB:
-
 ```bash
-adb pull /storage/emulated/0/Download/network_logs.csv
-adb pull /storage/emulated/0/Download/background_logs.csv
+adb pull /storage/emulated/0/Download/NetworkLogger/ ./phone_logs/
 ```
 
 ---
@@ -382,15 +338,15 @@ adb pull /storage/emulated/0/Download/background_logs.csv
 
 | Permission | Why it is needed |
 |------------|-----------------|
-| `ACCESS_FINE_LOCATION` | Required by Android to call `allCellInfo` and get GPS coordinates |
-| `ACCESS_COARSE_LOCATION` | Fallback location permission |
-| `READ_PHONE_STATE` | Required to read network type, operator name, and cell tower parameters |
-| `FOREGROUND_SERVICE` | Required to run WorkManager as a foreground service |
-| `FOREGROUND_SERVICE_DATA_SYNC` | Foreground service type declaration — mandatory on Android 14+ |
-| `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | Requests exemption so background worker is not killed by the OS |
+| `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION` | Required by Android for `allCellInfo` and for GPS |
+| `READ_PHONE_STATE` | Network type, `TelephonyDisplayInfo` (5G NSA), operator |
+| `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_LOCATION`, `FOREGROUND_SERVICE_DATA_SYNC` | The logging service and background worker (mandatory types on Android 14+) |
+| `POST_NOTIFICATIONS` | Logging notification and watchdog alerts (Android 13+) |
+| `INTERNET` | Uploading production sessions to Firebase |
+| `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | Asks to be exempt so logging isn't killed |
 
 > **Why does the app say "make and manage phone calls"?**  
-> `READ_PHONE_STATE` is grouped under Android's "Phone" permission category. Android shows this generic label for the entire group. The app **cannot** make calls, access call history, or interact with phone calls in any way. It only uses this permission to read cell tower signal data.
+> `READ_PHONE_STATE` belongs to Android's "Phone" permission group, which uses that generic label. The app **cannot** make calls or read call history; it only reads network state.
 
 ---
 
@@ -408,26 +364,35 @@ The app detects rooted devices using 7 independent methods. If any method fires,
 | `checkRootCloakingApps()` | Xposed Framework, RootCloak, HideMyRoot, Substrate packages |
 | `tryExecuteSu()` | Executes `su -c id` and checks output for `uid=0` — most reliable check |
 
-Root access is **not required** for the app to function. All features work identically on non-rooted devices.
+Root access is **not required** for the app to function.
 
 ---
 
 ## Known Behaviours
 
+### 5G NSA: `rsrp` is the LTE anchor
+On 5G NSA (e.g. Vi), the registered cell is the 4G anchor, so `rsrp`/`band` describe the anchor; `network` still shows `5G (NSA)`. The NR leg's signal isn't logged yet.
+
+### 5G SS-RSRP reads lower than LTE RSRP
+On a 5G serving cell `rsrp` is SS-RSRP, measured on different reference signals and typically a few dB below LTE RSRP — don't compare them one-to-one.
+
+### Invalid readings from some modems
+When the modem has no measurement, Android can return `Integer.MAX_VALUE` (2147483647), and some phones (seen on A001 and Motorola) report RSRP −44 with RSRQ −3 — both at the top of Android's range. Treat these as missing; the analysis and Grafana loaders drop them.
+
+### Throughput is passive
+`dlKbps`/`ulKbps` count *all* traffic on the phone; near zero usually means the phone was idle, not that the network is slow. Use a speed test (e.g. the ndt7 experiment scripts) to measure capacity.
+
+### "Unknown" network type
+Shown when phone-state permission is missing or the type isn't mapped. The cell data is still valid: an NCI > 255 means a 5G serving cell.
+
 ### Cell Info: Not Available (brief flicker)
-`telephonyManager.allCellInfo` returns an empty list during the modem's internal refresh cycle. The app shows "Cell Info: Not Available" for one 5-second cycle then automatically recovers. Data is not lost — the previous valid values are still saved in that CSV row.
+`allCellInfo` can be empty during the modem's refresh; the app recovers on the next 5 s cycle.
 
-### SINR shows N/A on 4G phones
-SINR is a 5G NR-only parameter. Android does not expose it for LTE connections by design. This is expected and correct.
+### Logging slows on aggressive OEM battery management
+Some OEMs throttle or kill background apps despite the foreground service. Enable **No Restrictions** and **Autostart**; the watchdog notifies if a session dies.
 
-### Background worker timing is irregular for first 2 cycles
-WorkManager enforces a 15-minute minimum but the first couple of cycles may run slightly early due to the `OneTimeWorkRequest` overlapping with the `PeriodicWorkRequest`. This normalizes after the first two runs.
-
-### Background logging stops at low battery
-On Realme, OPPO, OnePlus, and Xiaomi phones, the OS aggressively kills background processes when battery drops to approximately 20%. This is a phone OS restriction. Enable **No Restrictions** in battery settings and enable **Autostart** for NetworkLogger to minimize this.
-
-### Rooted OnePlus / Android 14
-Android 14 enforces strict `foregroundServiceType` declaration. The app handles this by declaring `foregroundServiceType="dataSync"` in the manifest and passing `FOREGROUND_SERVICE_TYPE_DATA_SYNC` to `ForegroundInfo` on API 34+.
+### Force-stopping right after Stop
+If the app is killed before the upload finishes (e.g. by a script's `am force-stop`), the CSV isn't cleared and that run is uploaded again inside the next session. Allow ~20 s after Stop; the analysis loaders de-duplicate by device and timestamp.
 
 ---
 
@@ -435,47 +400,45 @@ Android 14 enforces strict `foregroundServiceType` declaration. The app handles 
 
 | Problem | Root Cause | Fix Applied |
 |---------|-----------|-------------|
-| CSV files invisible in Files app | `getExternalFilesDir()` saves to hidden sandboxed folder on Android 10+ | Migrated to `MediaStore.Downloads` API |
-| New CSV file created on every 5-second cycle | `IS_PENDING = 1` hid the file from subsequent MediaStore queries | Removed `IS_PENDING`; added `IS_PENDING = 0` filter to all queries |
-| RSRQ and SINR always N/A on 5G | Was reading `csiRsrq` / `csiSinr`; modems only report SS fields | Changed to `ssRsrq` / `ssSinr` with CSI as fallback |
-| Background worker not running on release APK | OEM battery optimization kills WorkManager silently | Added foreground service notification + battery exemption |
-| App crash on rooted OnePlus (Android 14) | `InvalidForegroundServiceTypeException` — mandatory on Android 14 | Declared `foregroundServiceType="dataSync"` in manifest + `ForegroundInfo` service type |
-| App crash on launch (rooted phone, Android 12+) | `PhoneStateListener` blocked by root security framework | Replaced with `TelephonyCallback` for API 31+; kept `PhoneStateListener` for older |
-| GPS coordinates not updating while moving | `lastLocation` returns cached position | Switched to `getCurrentLocation()` for fresh fix each cycle |
-| Signal label stuck on "Weak" at -113 dBm | Used Android's generic 0-4 level instead of actual RSRP | Built `getRsrpSignalLabel()` using standard RSRP thresholds |
-| Background worker `SignalLevel` always N/A | `allCellInfo` returns empty if modem hasn't refreshed | Added `requestCellInfoUpdate()` + 300ms wait before reading |
-| `background_logs.csv` not created until 15 min after launch | `PeriodicWorkRequest` waits before first run | Added `OneTimeWorkRequestBuilder` to fire worker immediately on launch |
+| CSV files invisible in Files app | `getExternalFilesDir()` saves to a hidden sandboxed folder on Android 10+ | Migrated to `MediaStore.Downloads` |
+| New CSV file created every 5 s | `IS_PENDING = 1` hid the file from later queries | `IS_PENDING = 0` filter on queries |
+| RSRQ and SINR always N/A on 5G | Read `csiRsrq` / `csiSinr`; modems report SS fields | `ssRsrq` / `ssSinr` with CSI fallback |
+| 5 s sampling throttled to minutes with screen off | Handler loop on the Activity was frozen by Doze | Moved to a foreground `LoggingService` |
+| 5G NSA reported as plain 4G | `networkType` reports LTE on NSA | `TelephonyDisplayInfo.overrideNetworkType` |
+| Serving cell sometimes wrong | `allCellInfo` order isn't guaranteed | Pick the cell with `isRegistered` |
+| LTE "Cell ID" was the full ECI | `CellIdentityLte.ci` = 256 × eNB + Cell ID | Decomposed per 3GPP |
+| Silent session death | OS killed the process without Stop | WorkManager watchdog + notification |
+| Dev-mode data could reach Firebase | Mode was read at Stop, and dev rows shared the upload files | Mode captured at Start; dev sessions write to their own folder |
+| Band unknown for analysis | Only shown on screen | `BandInfo` + `arfcn/band/bandSource/bandwidthMHz/nrLegBand` columns |
+| App crash on rooted OnePlus (Android 14) | Missing `foregroundServiceType` | Declared service types in manifest + `ForegroundInfo` |
+| App crash on rooted Android 12+ | `PhoneStateListener` blocked | `TelephonyCallback` on API 31+ |
+| GPS not updating while moving | `lastLocation` is cached | `getCurrentLocation()` each cycle |
+
+---
+
+## Data Pipeline & Analysis
+
+- **[grafana_pipeline/](grafana_pipeline/README.md)** — `fetch_logs.py` downloads all sessions from Firebase Storage (service-account key), `pull_and_load_influx.py --mirror` loads them into InfluxDB with corrected timestamps, de-duplication and an `op` (Jio/Vi) tag, and the **NetworkLogger Map** Grafana dashboard shows RSRP and band on Geomap panels.
+- **[presentation_charts/](presentation_charts/README.md)** — scripts for route maps, campus RSRP/band maps, the controlled Jio-vs-Vi experiment, and cross-operator comparisons.
 
 ---
 
 ## Testing
 
-Tested on the following devices:
-
-| Device | Android | Network | Root | Result |
-|--------|---------|---------|------|--------|
-| Realme RMX3241 | Android 13 (API 33) | JIO 5G | Non-Rooted | Full 5G data — NCI, RSRQ, SINR, handover captured ✓ |
-| Sakshi's phone | Android 13 | Airtel 4G | Non-Rooted | LTE data — MCC/MNC/CID/RSRP/RSRQ captured ✓ |
-| OnePlus CPH2487 | Android 14 (API 34) | — | Rooted | App stable after Android 14 foreground service fix ✓ |
-| Ma'am's phone | Android — | Airtel 4G | Non-Rooted | Data collected; stopped at ~20% battery (OS restriction) |
-
-**Real data observed (JIO 5G, Delhi):**
-- Cell handover captured: PCI 529 → 574 → 385
-- RSRP range: -93 to -113 dBm
-- RSRQ: -3 to -12 dB
-- SINR: 0 to 15 dB
-- Neighbor cells: 4 to 6 simultaneously visible
-- GPS accuracy: 28–40 metres
+- **Unit tests:** `./gradlew :app:testDebugUnitTest` — channel → band lookup (`BandInfoTest`).
+- **Devices used for field data (2026):** OnePlus 11R CPH2487 ×2 (Android 14, rooted; Jio and Vi, controlled table experiment), Samsung SM-M325F (Android 12, Vi), Nothing A001 (Android 16, Vi), Motorola edge 50 neo (Android 16, Jio), moto g35 (Vi), Xiaomi, Infinix and Realme devices; ~60k GPS-tagged samples around IIT Delhi.
+- **Observed with band logging:** Jio on n78 (3.5 GHz) and n28 (700 MHz); Vi on B3, B8 and B41 — Vi's B41 reads ~14 dB weaker than B3 at the same spot.
 
 ---
 
 ## Future Scope
 
-- **Coverage heatmap** — overlay GPS + RSRP on a map to visualize signal across a route
-- **Cloud synchronization** — auto-upload CSV to Google Drive or Firebase
-- **Network quality score** — estimate MOS from RSRP / RSRQ / SINR
-- **Multi-device aggregation** — collect and compare data from multiple phones simultaneously
-- **Excel / chart export** — auto-generate graphs from logged data
-- **Signal drop alerts** — notify when RSRP falls below a configurable threshold
-- **Operator benchmarking** — compare JIO vs Airtel vs Vi on the same route
+Done since the first version: cloud upload (Firebase), coverage maps, multi-device aggregation, operator comparison, band logging.
 
+- **NR-leg signal for 5G NSA** (`nrLegRsrp` from `getSignalStrength().getCellSignalStrengths()`)
+- **Write `N/A` for invalid readings** (`Integer.MAX_VALUE`, −44/−3) at the source
+- **Handover events** — log each serving-cell change explicitly
+- **Total channel bandwidth** per connection (`ServiceState.getCellBandwidths()`)
+- **Active tests in-app** — periodic latency / throughput probes
+- **Session notes** — movement, indoor/outdoor, phone placement, 5G setting, stored with each session
+- **Dedicated release keystore** for the public build
