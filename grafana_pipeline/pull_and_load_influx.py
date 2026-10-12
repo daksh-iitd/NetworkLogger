@@ -12,6 +12,7 @@ instructions).
 
 import argparse
 import io
+import json
 import os
 import re
 import urllib.parse
@@ -74,50 +75,99 @@ def to_float(v):
         return None
 
 
-def parse_session_date(session_id):
-    # sessionId format: yyyyMMdd_HHmmss
+def parse_session_end(session_id):
+    # sessionId format: yyyyMMdd_HHmmss, stamped at upload — i.e. when the session ended
     try:
-        return datetime.strptime(session_id.split("_")[0], "%Y%m%d")
-    except (ValueError, IndexError, AttributeError):
+        return datetime.strptime(session_id, "%Y%m%d_%H%M%S")
+    except (ValueError, TypeError):
         return None
 
 
-def reconstruct_datetimes(rows, session_date):
-    """rows[i]['time'] is HH:MM:SS only; combine with session start date and
-    handle midnight rollover, same logic used for the earlier gap analysis."""
+def reconstruct_datetimes(rows, session_end):
+    """rows[i]['time'] is HH:MM:SS only. Anchor the last row on the upload date and
+    walk backwards, stepping back a day whenever the clock jumps forward (a midnight
+    crossing seen in reverse). Anchoring on the start instead shifts rows by a day."""
     out = []
-    day_offset = timedelta(0)
+    day = datetime.combine(session_end.date(), datetime.min.time())
     prev_t = None
-    for row in rows:
-        t = datetime.strptime(row["time"], "%H:%M:%S").time()
-        if prev_t is not None and t < prev_t and (
-            datetime.combine(session_date, prev_t) - datetime.combine(session_date, t)
-        ).total_seconds() > 3600:
-            day_offset += timedelta(days=1)
-        full = datetime.combine(session_date, t) + day_offset
-        out.append(full)
-        prev_t = t
-    return out
+    for row in reversed(rows):
+        t = datetime.strptime(row["time"], "%H:%M:%S")
+        tod = timedelta(hours=t.hour, minutes=t.minute, seconds=t.second)
+        if prev_t is None and day + tod > session_end + timedelta(minutes=5):
+            day -= timedelta(days=1)
+        elif prev_t is not None and tod > prev_t + timedelta(hours=1):
+            day -= timedelta(days=1)
+        out.append(day + tod)
+        prev_t = tod
+    return out[::-1]
 
 
-def load_network_logs_csv(path, metadata, write_api):
+# Android emulator default GPS fix (Google HQ) — test runs, not real positions
+EMULATOR_FIX = (37.422, -122.084)
+TIME_RE = re.compile(r"^\d{2}:\d{2}:\d{2}$")
+
+
+def operator_of(row):
+    # Operator *names* vary by phone ("Jio True5G", "JIO 4G", "Vi India"...); the MCC/MNC don't
+    mcc, mnc = row.get("mcc", ""), row.get("mnc", "")
+    if mcc.startswith("405"):
+        return "Jio"
+    if mnc in ("11", "011"):
+        return "Vi"
+    name = (row.get("operator") or "").lower()
+    if "jio" in name:
+        return "Jio"
+    if name.startswith("vi") or "vodafone" in name:
+        return "Vi"
+    return row.get("operator") or "Unknown"
+
+
+def clean_fields(row):
+    """Numeric fields worth writing, with known-bad readings removed (same rules as the charts)."""
+    vals = {f: to_float(row.get(f)) for f in ["lat", "lon", "rsrp", "rsrq", "sinr", "neighborCount", "dlKbps",
+                                              "ulKbps", "arfcn", "bandwidthMHz"]}
+    rsrp, rsrq = vals["rsrp"], vals["rsrq"]
+    # Int.MAX_VALUE / out-of-range, and the −44 dBm + −3 dB "no valid measurement" pair some modems report
+    if rsrp is not None and (rsrp > -30 or rsrp < -150 or (rsrp == -44 and rsrq == -3)):
+        vals["rsrp"] = vals["rsrq"] = None
+    if vals["rsrq"] is not None and (vals["rsrq"] > 0 or vals["rsrq"] < -40):
+        vals["rsrq"] = None
+    lat, lon = vals["lat"], vals["lon"]
+    if lat is not None and lon is not None and (
+            lat == 0 or lon == 0 or (round(lat, 3), round(lon, 3)) == EMULATOR_FIX):
+        vals["lat"] = vals["lon"] = None
+    return {k: v for k, v in vals.items() if v is not None}
+
+
+def load_network_logs_csv(path, metadata, write_api, bucket=INFLUX_BUCKET, seen=None):
     device_id = metadata.get("deviceId", "unknown")
     session_id = metadata.get("sessionId", "unknown")
     tester_name = metadata.get("testerName", "Unknown")
     device_model = metadata.get("deviceModel", "unknown")
 
-    session_date = parse_session_date(session_id) or datetime(1970, 1, 1)
+    session_end = parse_session_end(session_id) or datetime(1970, 1, 1)
 
     with open(path, newline="") as f:
-        lines = f.read().strip().split("\n")
+        # NUL bytes appear where a write was cut off (app force-stopped mid-write)
+        lines = f.read().replace("\x00", "").strip().split("\n")
     if len(lines) < 2:
         return 0
     header = lines[0].split(",")
     rows = [dict(zip(header, line.split(","))) for line in lines[1:]]
-    timestamps = reconstruct_datetimes(rows, session_date)
+    rows = [r for r in rows if TIME_RE.match(r.get("time", ""))]
+    if not rows:
+        return 0
+    timestamps = reconstruct_datetimes(rows, session_end)
 
     points = []
     for row, ts in zip(rows, timestamps):
+        # A run whose upload didn't finish is re-uploaded inside the next session's file;
+        # with a different sessionId tag it would become a duplicate series, so keep the first.
+        if seen is not None:
+            key = (device_id, ts)
+            if key in seen:
+                continue
+            seen.add(key)
         p = (
             Point("network_log")
             .tag("deviceId", device_id)
@@ -129,19 +179,24 @@ def load_network_logs_csv(path, metadata, write_api):
             .tag("operator", row.get("operator", "Unknown"))
             .tag("pci", row.get("pci", "N/A"))
             .tag("screenOn", row.get("screenOn", "N/A"))
+            .tag("band", row.get("band", "N/A"))
+            .tag("bandSource", row.get("bandSource", "N/A"))
+            .tag("nrLegBand", row.get("nrLegBand", "N/A"))
+            .tag("op", operator_of(row))
             .time(ts, WritePrecision.S)
         )
-        for field in ["lat", "lon", "rsrp", "rsrq", "sinr", "neighborCount", "dlKbps", "ulKbps"]:
-            val = to_float(row.get(field))
-            if val is not None:
-                p = p.field(field, val)
+        fields = clean_fields(row)
+        if not fields:
+            continue
+        for field, val in fields.items():
+            p = p.field(field, val)
         points.append(p)
 
-    write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=points)
+    write_api.write(bucket=bucket, org=INFLUX_ORG, record=points)
     return len(points)
 
 
-def load_background_logs_csv(path, metadata, write_api):
+def load_background_logs_csv(path, metadata, write_api, bucket=INFLUX_BUCKET):
     device_id = metadata.get("deviceId", "unknown")
     session_id = metadata.get("sessionId", "unknown")
     tester_name = metadata.get("testerName", "Unknown")
@@ -183,39 +238,61 @@ def load_background_logs_csv(path, metadata, write_api):
                 p = p.field(influx_field, val)
         points.append(p)
 
-    write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=points)
+    write_api.write(bucket=bucket, org=INFLUX_ORG, record=points)
     return len(points)
+
+
+def iter_mirror(mirror_dir):
+    """(object name, local path, upload metadata) for every file in a fetch_logs.py mirror,
+    oldest session first so the first upload of a re-uploaded run wins de-duplication."""
+    found = []
+    for root, _, files in os.walk(os.path.join(mirror_dir, "logs")):
+        for fn in files:
+            if fn.endswith(".csv"):
+                path = os.path.join(root, fn)
+                meta = {}
+                if os.path.exists(path + ".meta.json"):
+                    with open(path + ".meta.json") as f:
+                        meta = json.load(f).get("metadata", {})
+                found.append((os.path.relpath(path, mirror_dir), path, meta))
+    return sorted(found, key=lambda x: x[0].split(os.sep)[-2])
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--influx-token", required=True)
+    parser.add_argument("--mirror", help="Load from a fetch_logs.py mirror directory instead of the public REST "
+                                         "API (which now returns 403)")
+    parser.add_argument("--bucket", default=INFLUX_BUCKET)
     args = parser.parse_args()
 
-    print("Listing objects in Firebase Storage...")
-    objects = list_all_objects()
-    print(f"Found {len(objects)} files.")
+    if args.mirror:
+        objects = iter_mirror(args.mirror)
+        print(f"Found {len(objects)} files in mirror {args.mirror}.")
+    else:
+        print("Listing objects in Firebase Storage...")
+        objects = []
+        for obj in list_all_objects():
+            local_path = os.path.join(LOCAL_MIRROR_DIR, obj["name"])
+            download_object(obj["name"], local_path)
+            objects.append((obj["name"], local_path, get_metadata(obj["name"])))
+        print(f"Found {len(objects)} files.")
 
     client = InfluxDBClient(url=INFLUX_URL, token=args.influx_token, org=INFLUX_ORG)
     write_api = client.write_api(write_options=SYNCHRONOUS)
 
-    total_points = 0
-    for obj in objects:
-        name = obj["name"]
-        local_path = os.path.join(LOCAL_MIRROR_DIR, name)
-        download_object(name, local_path)
-        metadata = get_metadata(name)
-
+    total_points, seen = 0, set()
+    for name, local_path, metadata in objects:
         if name.endswith("network_logs.csv"):
-            n = load_network_logs_csv(local_path, metadata, write_api)
+            n = load_network_logs_csv(local_path, metadata, write_api, args.bucket, seen)
             print(f"  {name}: {n} points -> network_log")
             total_points += n
         elif name.endswith("background_logs.csv"):
-            n = load_background_logs_csv(local_path, metadata, write_api)
+            n = load_background_logs_csv(local_path, metadata, write_api, args.bucket)
             print(f"  {name}: {n} points -> background_log")
             total_points += n
 
-    print(f"\nDone. Wrote {total_points} total points to InfluxDB bucket '{INFLUX_BUCKET}'.")
+    print(f"\nDone. Wrote {total_points} total points to InfluxDB bucket '{args.bucket}'.")
     client.close()
 
 

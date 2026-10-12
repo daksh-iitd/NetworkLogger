@@ -4,7 +4,31 @@ All notable changes to NetworkLogger are documented here, organized by version.
 
 ---
 
-## [Current] — July 2026
+## [v0.6] — October 2026
+
+### Added
+- **Band logging** (`BandInfo.kt`): serving-cell band from `getBands()` (Android 11+) with fallback to the 3GPP EARFCN / NR-ARFCN tables; overlapping NR bands logged as all candidates (e.g. `n78/n77`)
+- New CSV columns at the end of `network_logs`: `arfcn`, `band`, `bandSource`, `bandwidthMHz`, `nrLegBand`; band shown on the cell card
+- `internal` / `public` build flavors — the public build has no developer mode and always uploads
+- Unit tests for the channel → band lookup (`BandInfoTest`)
+
+### Fixed
+- Old-format CSVs (different header) are renamed `<name>_old-format_<time>.csv` instead of receiving rows with a different column layout
+- Band fields reset every sample so a failed read can't repeat the previous cell's band
+
+---
+
+## [v0.5] — September 2026
+
+### Added
+- **Developer mode** (default on a fresh install): logs stay on the phone in `Download/NetworkLogger/session_<start time>/`; production mode uploads to Firebase on Stop
+- Mode bar with switch button; amber/brown colours in developer mode; switching blocked while logging
+- `LogStorage.kt`: session mode captured at Start, so developer data can never reach the upload files
+- Foreground `LoggingService` for the 5 s loop, Firebase Storage upload with session metadata, WorkManager session watchdog, throughput and screen-state columns
+
+---
+
+## [v0.4.1] — July 2026
 
 ### Added
 - 7-layer root detection system (su binaries, root packages, build tags, dangerous props, RW paths, cloaking apps, su execution)

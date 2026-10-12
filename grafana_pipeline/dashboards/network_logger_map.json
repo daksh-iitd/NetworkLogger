@@ -1,0 +1,456 @@
+{
+  "uid": "networklogger-map",
+  "title": "NetworkLogger Map",
+  "tags": [
+    "networklogger",
+    "map"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-45d",
+    "to": "now"
+  },
+  "refresh": "",
+  "templating": {
+    "list": [
+      {
+        "name": "op",
+        "label": "Operator",
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "P7C70A67DE99A08E6"
+        },
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"network_logs_v2\", tag: \"op\", start: -365d)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "refresh": 1,
+        "sort": 1,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "regex": "/^(Jio|Vi)$/"
+      },
+      {
+        "name": "band",
+        "label": "Band",
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "P7C70A67DE99A08E6"
+        },
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"network_logs_v2\", tag: \"band\", start: -365d)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "refresh": 1,
+        "sort": 1,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "deviceId",
+        "label": "Device",
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "P7C70A67DE99A08E6"
+        },
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"network_logs_v2\", tag: \"deviceId\", start: -365d)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "refresh": 1,
+        "sort": 1,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "geomap",
+      "title": "RSRP \u2014 Jio",
+      "description": "Every Jio sample, coloured by serving-cell RSRP (same classes as the app's signal labels). Jio values are mostly 5G SS-RSRP, a few dB below LTE RSRP by definition.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P7C70A67DE99A08E6"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 17
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P7C70A67DE99A08E6"
+          },
+          "query": "from(bucket: \"network_logs_v2\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_log\")\n  |> filter(fn: (r) => r.op == \"Jio\")\n  |> filter(fn: (r) => r.band =~ /^${band:regex}$/)\n  |> filter(fn: (r) => r.deviceId =~ /^${deviceId:regex}$/)\n  |> filter(fn: (r) => r._field == \"lat\" or r._field == \"lon\" or r._field == \"rsrp\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.lat and exists r.lon and exists r.rsrp)\n  |> group()\n  |> keep(columns: [\"_time\", \"lat\", \"lon\", \"rsrp\", \"band\", \"deviceModel\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dBm",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d7301f",
+                "value": null
+              },
+              {
+                "color": "#fc8d59",
+                "value": -110
+              },
+              {
+                "color": "#fee08b",
+                "value": -100
+              },
+              {
+                "color": "#91bfdb",
+                "value": -90
+              },
+              {
+                "color": "#2c7bb6",
+                "value": -80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "view": {
+          "id": "coords",
+          "lat": 28.5465,
+          "lon": 77.1885,
+          "zoom": 15
+        },
+        "controls": {
+          "showZoom": true,
+          "mouseWheelZoom": true,
+          "showAttribution": true
+        },
+        "basemap": {
+          "type": "default",
+          "name": "Basemap",
+          "config": {}
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "RSRP \u2014 Jio",
+            "tooltip": true,
+            "location": {
+              "mode": "coords",
+              "latitude": "lat",
+              "longitude": "lon"
+            },
+            "config": {
+              "showLegend": true,
+              "style": {
+                "size": {
+                  "fixed": 4
+                },
+                "color": {
+                  "field": "rsrp",
+                  "fixed": "dark-green"
+                },
+                "opacity": 0.8,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "type": "geomap",
+      "title": "RSRP \u2014 Vi",
+      "description": "Every Vi sample, coloured by serving-cell RSRP. Points stack where phones sat still.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P7C70A67DE99A08E6"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 17
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P7C70A67DE99A08E6"
+          },
+          "query": "from(bucket: \"network_logs_v2\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_log\")\n  |> filter(fn: (r) => r.op == \"Vi\")\n  |> filter(fn: (r) => r.band =~ /^${band:regex}$/)\n  |> filter(fn: (r) => r.deviceId =~ /^${deviceId:regex}$/)\n  |> filter(fn: (r) => r._field == \"lat\" or r._field == \"lon\" or r._field == \"rsrp\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.lat and exists r.lon and exists r.rsrp)\n  |> group()\n  |> keep(columns: [\"_time\", \"lat\", \"lon\", \"rsrp\", \"band\", \"deviceModel\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dBm",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d7301f",
+                "value": null
+              },
+              {
+                "color": "#fc8d59",
+                "value": -110
+              },
+              {
+                "color": "#fee08b",
+                "value": -100
+              },
+              {
+                "color": "#91bfdb",
+                "value": -90
+              },
+              {
+                "color": "#2c7bb6",
+                "value": -80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "view": {
+          "id": "coords",
+          "lat": 28.5465,
+          "lon": 77.1885,
+          "zoom": 15
+        },
+        "controls": {
+          "showZoom": true,
+          "mouseWheelZoom": true,
+          "showAttribution": true
+        },
+        "basemap": {
+          "type": "default",
+          "name": "Basemap",
+          "config": {}
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "RSRP \u2014 Vi",
+            "tooltip": true,
+            "location": {
+              "mode": "coords",
+              "latitude": "lat",
+              "longitude": "lon"
+            },
+            "config": {
+              "showLegend": true,
+              "style": {
+                "size": {
+                  "fixed": 4
+                },
+                "color": {
+                  "field": "rsrp",
+                  "fixed": "dark-green"
+                },
+                "opacity": 0.8,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "type": "geomap",
+      "title": "Serving band \u2014 ${op}",
+      "description": "Serving band as reported by the phone (band-logging app version, Oct 2026 onwards). Orange = low band (< 1 GHz), green = mid band (1.8\u20132.1 GHz), blue = high band (2.3\u20133.5 GHz), grey = no band logged.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P7C70A67DE99A08E6"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 24,
+        "h": 17
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P7C70A67DE99A08E6"
+          },
+          "query": "from(bucket: \"network_logs_v2\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_log\")\n  |> filter(fn: (r) => r.op =~ /^${op:regex}$/)\n  |> filter(fn: (r) => r.band =~ /^${band:regex}$/)\n  |> filter(fn: (r) => r.deviceId =~ /^${deviceId:regex}$/)\n  |> filter(fn: (r) => r._field == \"lat\" or r._field == \"lon\" or r._field == \"rsrp\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.lat and exists r.lon and exists r.rsrp)\n  |> group()\n  |> keep(columns: [\"_time\", \"lat\", \"lon\", \"rsrp\", \"band\", \"op\", \"deviceModel\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#c3c2b7"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "band"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "B5": {
+                        "color": "#eb6834",
+                        "index": 0
+                      },
+                      "B8": {
+                        "color": "#eb6834",
+                        "index": 1
+                      },
+                      "n28": {
+                        "color": "#eb6834",
+                        "index": 2
+                      },
+                      "B1": {
+                        "color": "#1baf7a",
+                        "index": 3
+                      },
+                      "B3": {
+                        "color": "#1baf7a",
+                        "index": 4
+                      },
+                      "n1": {
+                        "color": "#1baf7a",
+                        "index": 5
+                      },
+                      "B40": {
+                        "color": "#2a78d6",
+                        "index": 6
+                      },
+                      "B41": {
+                        "color": "#2a78d6",
+                        "index": 7
+                      },
+                      "n78": {
+                        "color": "#2a78d6",
+                        "index": 8
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "view": {
+          "id": "coords",
+          "lat": 28.5465,
+          "lon": 77.1885,
+          "zoom": 15
+        },
+        "controls": {
+          "showZoom": true,
+          "mouseWheelZoom": true,
+          "showAttribution": true
+        },
+        "basemap": {
+          "type": "default",
+          "name": "Basemap",
+          "config": {}
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "Serving band \u2014 ${op}",
+            "tooltip": true,
+            "location": {
+              "mode": "coords",
+              "latitude": "lat",
+              "longitude": "lon"
+            },
+            "config": {
+              "showLegend": true,
+              "style": {
+                "size": {
+                  "fixed": 4
+                },
+                "color": {
+                  "field": "band",
+                  "fixed": "dark-green"
+                },
+                "opacity": 0.8,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

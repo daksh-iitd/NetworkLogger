@@ -111,6 +111,9 @@ If it shows **"No devices"** even after plugging in:
 
 ## Step 6 — Build and Run the App
 
+0. Choose the build variant: **Build → Select Build Variant** →
+    - `internalDebug` — research version with the Developer/Production mode toggle
+    - `publicRelease` — version for ordinary users (no developer mode, always uploads)
 1. In Android Studio, click the **green triangle ▶ Run button** at the top (or press `Shift + F10`)
 2. A dialog may appear asking which device to install on — select your phone and click **OK**
 3. Android Studio will compile the code and install the app on your phone (takes 1–3 minutes)
@@ -159,21 +162,25 @@ If your phone has an **Autostart** option (common on Realme, Xiaomi, OPPO phones
 
 Once the app is open and permissions are granted:
 
+**Choose a mode (internal build only):**
+- The bar under the header shows **DEVELOPER MODE** (amber app colours) or **PRODUCTION MODE** (navy)
+- A fresh install starts in **Developer mode** — logs stay on the phone and nothing is uploaded
+- Tap **Switch to Production** to upload sessions to Firebase instead (you can't switch while logging)
+- Enter your name under **Tester Profile** and tap **Save** — it is attached to uploaded sessions
+
 **To start logging:**
 - Tap the green **START LOGGING** button
-- The app will begin recording network data every 5 seconds
+- The app records network data every 5 seconds, also in the background (a notification shows it is running)
 - You will see the logging duration timer counting up
 
 **To stop logging:**
-- Tap the red **STOP LOGGING** button
-- The screen will show how long logging ran
+- Tap the red **STOP LOGGING** button (or **Stop Logging** in the notification)
+- Production mode: the session uploads to Firebase, then the local files are cleared
 
 **To find the recorded data:**
-- Open the **Files** app on the phone
-- Go to **Downloads**
-- You will find two files:
-    - `network_logs.csv` — cell tower and GPS data (recorded while logging was active)
-    - `background_logs.csv` — battery, RAM, storage, network data (recorded automatically every 15 minutes)
+- Open the **Files** app on the phone and go to **Downloads**
+- Developer mode: `NetworkLogger/session_<start time>/` holds `network_logs_<start time>.csv` and `background_logs_<start time>.csv` for each session
+- Production mode: `network_logs.csv` and `background_logs.csv` (only until they are uploaded)
 
 **To open the CSV files on a laptop:**
 - Connect phone to laptop
@@ -187,9 +194,11 @@ Once the app is open and permissions are granted:
 | Field | What it means |
 |-------|--------------|
 | **Location** | GPS coordinates (latitude, longitude) |
-| **Network** | Current network type — 4G, 5G, etc. |
+| **Mode bar** | Developer or Production mode, with the switch button (internal build only) |
+| **Network** | Current network type — 4G, 4G (CA), 5G (NSA), 5G, etc. |
 | **Signal** | Signal strength label (Very Weak to Very Strong) |
-| **Cell Tower Info** | Technical parameters of the connected cell tower |
+| **Cell Tower Info** | Parameters of the serving cell, including its **band** (e.g. B3, n78) |
+| **Throughput** | Download / upload kbps of all traffic on the phone |
 | **DURATION** | How long logging has been running (HH:MM:SS) |
 | **DEVICE** | Whether the phone is Rooted or Non-Rooted |
 | **File paths** | Where the CSV files are being saved on the phone |
@@ -240,17 +249,18 @@ If the phone's battery drops below approximately 20%, some phones stop all backg
 
 ---
 
-## Generating a Signed APK (to install without Android Studio)
+## Generating an APK (to install without Android Studio)
 
-If you want to share the app as an APK file that can be installed directly on any Android phone without needing Android Studio:
+The quickest way, from the project folder:
 
-1. In Android Studio: **Build → Generate Signed Bundle / APK**
-2. Select **APK** and click **Next**
-3. If you don't have a keystore yet, click **Create new** and fill in any details
-4. Keep note of the keystore file location and password
-5. Select **release** build variant and click **Finish**
-6. The APK will be generated at: `app/release/app-release.apk`
-7. Transfer this file to any Android phone and open it to install
+```bash
+./gradlew :app:assemblePublicRelease   # for ordinary users  → app/build/outputs/apk/public/release/
+./gradlew :app:assembleInternalDebug   # research version    → app/build/outputs/apk/internal/debug/
+```
+
+The public release is signed with your machine's debug key so it installs straight away. Before sharing it widely (or on the Play Store), sign it with a dedicated keystore instead — **Build → Generate Signed Bundle / APK** → APK → create/choose a keystore → `publicRelease` — and keep that keystore safe: future updates must be signed with the same key.
+
+Transfer the APK to the phone and open it to install.
 
 > To install an APK directly, the phone needs **"Install unknown apps"** or **"Install from unknown sources"** enabled in Settings.
 
@@ -260,11 +270,14 @@ If you want to share the app as an APK file that can be installed directly on an
 
 | Folder / File | What's inside |
 |--------------|--------------|
-| `app/src/main/java/.../MainActivity.kt` | Main screen logic, GPS, cell tower reading, root detection |
-| `app/src/main/java/.../NetworkWorker.kt` | Background worker — battery, RAM, storage, network |
+| `app/src/main/java/.../MainActivity.kt` | Main screen, permissions, developer-mode toggle, root detection |
+| `app/src/main/java/.../LoggingService.kt` | Foreground service: GPS + cell sampling every 5 s, upload on Stop |
+| `app/src/main/java/.../NetworkWorker.kt` | Background worker — battery, RAM, storage, network; session watchdog |
+| `app/src/main/java/.../LogStorage.kt` | Decides where CSV rows go (developer folder vs Downloads) |
+| `app/src/main/java/.../BandInfo.kt` | Works out the serving cell's frequency band |
 | `app/src/main/res/layout/activity_main.xml` | The UI layout of the app screen |
 | `app/src/main/AndroidManifest.xml` | App permissions and configuration |
-| `app/build.gradle.kts` | Project dependencies and SDK versions |
+| `app/build.gradle.kts` | Dependencies, SDK versions, `internal` / `public` build flavors |
 
 ---
 

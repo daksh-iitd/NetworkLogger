@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
@@ -14,11 +15,14 @@ import android.telephony.PhoneStateListener
 import android.telephony.SignalStrength
 import android.telephony.TelephonyManager
 import android.util.Log
+import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.cardview.widget.CardView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import java.io.File
@@ -36,6 +40,18 @@ class MainActivity : AppCompatActivity() {
         // gone stale (the service died without anyone tapping Stop) and alerts.
         const val KEY_SESSION_ACTIVE = "session_active"
         const val KEY_LAST_TICK_MS = "last_tick_ms"
+
+        // Developer mode: on Stop, logs are archived into a timestamped folder under
+        // Downloads instead of being uploaded to Firebase. Defaults to ON, so a fresh
+        // install never uploads until someone explicitly switches to production.
+        const val KEY_DEV_MODE = "dev_mode"
+
+        // The public build has no dev mode at all: always production, whatever an
+        // earlier install may have left in preferences.
+        fun isDevMode(context: Context): Boolean =
+            BuildConfig.DEV_MODE_AVAILABLE &&
+                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .getBoolean(KEY_DEV_MODE, true)
     }
 
     private lateinit var locationText: TextView
@@ -111,10 +127,28 @@ class MainActivity : AppCompatActivity() {
         applyRootDetection()
         // ────────────────────────────────────────────────────────────────
 
-        networkLogPathText.text =
-            "network_logs.csv  →  /storage/emulated/0/Download/network_logs.csv"
-        backgroundLogPathText.text =
-            "background_logs.csv  →  /storage/emulated/0/Download/background_logs.csv"
+        val devModeButton = findViewById<Button>(R.id.devModeButton)
+        devModeButton.setOnClickListener {
+            // The mode decides what happens to the files on Stop, so don't let it
+            // flip mid-session and surprise the tester with an upload (or lack of one).
+            if (isLogging) {
+                Toast.makeText(this, "Stop logging before switching modes", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val devMode = !isDevMode(this)
+            prefs.edit().putBoolean(KEY_DEV_MODE, devMode).apply()
+            applyModeColors(devMode)
+            Toast.makeText(
+                this,
+                if (devMode) "Developer mode ON — logs stay on this device"
+                else "Production mode — logs upload to Firebase on stop",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+        applyModeColors(isDevMode(this))
+        if (!BuildConfig.DEV_MODE_AVAILABLE) {
+            findViewById<View>(R.id.modeBar).visibility = View.GONE
+        }
 
         startButton.setOnClickListener {
             if (!isLogging) {
@@ -154,6 +188,56 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         unregisterReceiver(updateReceiver)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // DEV MODE THEME — production keeps the original navy/indigo palette;
+    // developer mode switches to amber/brown so the mode is obvious at a glance
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private fun applyModeColors(devMode: Boolean) {
+        val background = Color.parseColor(if (devMode) "#1A1206" else "#0A0E1A")
+        val header     = Color.parseColor(if (devMode) "#3D2606" else "#111827")
+        val card       = Color.parseColor(if (devMode) "#2B1D0A" else "#161D2F")
+        val pathsCard  = Color.parseColor(if (devMode) "#221605" else "#0F172A")
+        val accent     = Color.parseColor(if (devMode) "#F59E0B" else "#6366F1")
+        val modeBar    = Color.parseColor(if (devMode) "#F59E0B" else "#1E293B")
+        val modeText   = Color.parseColor(if (devMode) "#1C1100" else "#9CA3AF")
+        val buttonBg   = Color.parseColor(if (devMode) "#1C1100" else "#6366F1")
+
+        findViewById<View>(R.id.rootScroll).setBackgroundColor(background)
+        findViewById<View>(R.id.headerBar).setBackgroundColor(header)
+        findViewById<View>(R.id.modeBar).setBackgroundColor(modeBar)
+        findViewById<TextView>(R.id.modeText).apply {
+            text = if (devMode) "DEVELOPER MODE\nLogs stay on this device"
+                   else "PRODUCTION MODE\nLogs upload to Firebase on stop"
+            setTextColor(modeText)
+        }
+        findViewById<Button>(R.id.devModeButton).apply {
+            text = if (devMode) "Switch to Production" else "Switch to Dev Mode"
+            backgroundTintList = ColorStateList.valueOf(buttonBg)
+        }
+
+        networkLogPathText.text = if (devMode)
+            "Each session  →  /storage/emulated/0/Download/NetworkLogger/session_<start time>/"
+        else
+            "network_logs.csv  →  /storage/emulated/0/Download/network_logs.csv"
+        backgroundLogPathText.text = if (devMode)
+            "network_logs_<time>.csv + background_logs_<time>.csv"
+        else
+            "background_logs.csv  →  /storage/emulated/0/Download/background_logs.csv"
+
+        recolorTree(findViewById(R.id.rootScroll), card, pathsCard, accent)
+    }
+
+    private fun recolorTree(view: View, card: Int, pathsCard: Int, accent: Int) {
+        when {
+            view is CardView -> view.setCardBackgroundColor(if (view.tag == "pathsCard") pathsCard else card)
+            view.tag == "accent" -> view.setBackgroundColor(accent)
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) recolorTree(view.getChildAt(i), card, pathsCard, accent)
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -22,6 +22,24 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // internal: research build with the Developer/Production toggle (dev mode keeps logs on the phone).
+    // public:   build to hand to ordinary users — no toggle, always uploads like production.
+    // Same applicationId for both, because google-services.json is registered for it.
+    flavorDimensions += "audience"
+    productFlavors {
+        create("internal") {
+            dimension = "audience"
+            buildConfigField("boolean", "DEV_MODE_AVAILABLE", "true")
+        }
+        create("public") {
+            dimension = "audience"
+            buildConfigField("boolean", "DEV_MODE_AVAILABLE", "false")
+            // Installable without extra setup. Replace with a dedicated release keystore before any
+            // wide or Play Store distribution — users can't update across a signing-key change.
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -37,6 +55,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     packaging {
         resources {
