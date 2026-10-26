@@ -7,20 +7,16 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.ContentUris
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.TrafficStats
-import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.provider.MediaStore
-import android.provider.Settings
+import android.os.PowerManager
+import android.os.Process
 import android.telephony.CellIdentityNr
 import android.telephony.CellInfoLte
 import android.telephony.CellInfoNr
@@ -33,9 +29,6 @@ import androidx.core.content.ContextCompat
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.storage.FirebaseStorage
-import com.google.firebase.storage.StorageMetadata
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -48,6 +41,10 @@ class LoggingService : Service() {
     companion object {
         const val ACTION_START = "com.example.networklogger.action.START_LOGGING"
         const val ACTION_STOP = "com.example.networklogger.action.STOP_LOGGING"
+        // Continue the session in progress (sent by NetworkWorker's watchdog); a restart by
+        // Android itself arrives with no intent at all and is treated the same way
+        const val ACTION_RESUME = "com.example.networklogger.action.RESUME_LOGGING"
+        const val EXTRA_RESUME_REASON = "resumeReason"
         const val ACTION_UPDATE = "com.example.networklogger.UPDATE"
         const val ACTION_STATUS_CHANGED = "com.example.networklogger.STATUS_CHANGED"
 
@@ -70,8 +67,9 @@ class LoggingService : Service() {
     private lateinit var telephonyManager: TelephonyManager
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private val handler = Handler(Looper.getMainLooper())
-    private val firebaseAuth by lazy { FirebaseAuth.getInstance() }
-    private val firebaseStorage by lazy { FirebaseStorage.getInstance() }
+    // Keeps the CPU running while logging. Without it the 5 s timer stalls whenever the
+    // idle phone sleeps (Doze), which caused most of the >1 min gaps in the logs.
+    private var wakeLock: PowerManager.WakeLock? = null
 
     private var loggingStartTime = 0L
 
@@ -117,6 +115,15 @@ class LoggingService : Service() {
         }
     }
 
+    // Production sessions only: push the samples buffered since the last flush
+    private val flushRunnable = object : Runnable {
+        override fun run() {
+            if (!isRunning) return
+            CloudSync.flush(this@LoggingService)
+            handler.postDelayed(this, CloudSync.FLUSH_INTERVAL_MS)
+        }
+    }
+
     // Stamped on every successful tick; NetworkWorker's periodic watchdog check
     // compares this against "now" to notice a session that died silently (killed
     // by the OS, crashed, etc.) without anyone tapping Stop.
@@ -136,10 +143,11 @@ class LoggingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopLogging()
-        } else {
-            startLogging()
+        when (intent?.action) {
+            ACTION_STOP -> stopLogging()
+            ACTION_START -> startLogging()
+            // null intent = Android restarting the service after killing it (START_STICKY)
+            else -> resumeLogging(intent?.getStringExtra(EXTRA_RESUME_REASON) ?: "restarted_by_android")
         }
         return START_STICKY
     }
@@ -149,7 +157,31 @@ class LoggingService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(logRunnable)
+        handler.removeCallbacks(flushRunnable)
+        // Destroyed without Stop: record it and hand Firestore what's buffered before the
+        // process goes. Unlike a process kill, Android keeps no exit record for this case.
+        if (isRunning) {
+            recordEvent(SessionDiagnostics.event("service_destroyed", "screenOn" to isScreenOn()))
+            if (!LogStorage.isDevSession(this)) CloudSync.flush(this)
+        }
+        releaseWakeLock()
         isRunning = false
+    }
+
+    // The user swiped the app away in recent apps; some phones stop the service right after
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        if (isRunning) recordEvent(SessionDiagnostics.event("task_removed"))
+    }
+
+    // Android 15+: a time-limited foreground service type ran out of time
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        super.onTimeout(startId, fgsType)
+        if (isRunning) recordEvent(SessionDiagnostics.event("fgs_timeout", "fgsType" to fgsType))
+    }
+
+    private fun recordEvent(event: Map<String, Any?>) {
+        if (!LogStorage.isDevSession(this)) CloudSync.recordEvents(this, listOf(event))
     }
 
     private fun startLogging() {
@@ -157,15 +189,75 @@ class LoggingService : Service() {
         isRunning = true
         loggingStartTime = System.currentTimeMillis()
         LogStorage.beginSession(this, loggingStartTime)
+        if (!LogStorage.isDevSession(this)) {
+            CloudSync.beginSession(this, loggingStartTime)
+            handler.postDelayed(flushRunnable, CloudSync.FLUSH_INTERVAL_MS)
+        }
         startForegroundCompat(buildNotification("Starting..."))
         broadcastStatus(true)
         getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(MainActivity.KEY_SESSION_ACTIVE, true)
             .putLong(MainActivity.KEY_LAST_TICK_MS, System.currentTimeMillis())
+            .putLong(SessionDiagnostics.KEY_SESSION_START_MS, loggingStartTime)
             .apply()
+        acquireWakeLock()
         handler.post(logRunnable)
         startBackgroundMonitoring()
+    }
+
+    // Picks the session back up after the service was killed: same session (and CSV
+    // folder in dev mode), with the restart and the recorded cause of the kill noted on it.
+    private fun resumeLogging(reason: String) {
+        if (isRunning) return
+        val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+        if (!prefs.getBoolean(MainActivity.KEY_SESSION_ACTIVE, false)) {
+            // Nothing to resume (the session was stopped or already given up on)
+            stopSelf()
+            return
+        }
+        val now = System.currentTimeMillis()
+        val lastTick = prefs.getLong(MainActivity.KEY_LAST_TICK_MS, now)
+        try {
+            startForegroundCompat(buildNotification("Resuming..."))
+        } catch (e: Throwable) {
+            // e.g. Android 14+ refusing a location service started from the background
+            Log.w("LoggingService", "Can't resume in the foreground: ${e.message}")
+            if (!LogStorage.isDevSession(this)) {
+                CloudSync.recordEvents(this, SessionDiagnostics.newProcessExits(this) +
+                        SessionDiagnostics.event("resume_failed", "reason" to reason, "error" to e.javaClass.simpleName))
+                CloudSync.endSession(this, lastTick, status = "died")
+            }
+            prefs.edit().putBoolean(MainActivity.KEY_SESSION_ACTIVE, false).apply()
+            NetworkWorker.notifyLoggingStopped(this)
+            stopSelf()
+            return
+        }
+        isRunning = true
+        loggingStartTime = prefs.getLong(SessionDiagnostics.KEY_SESSION_START_MS, now)
+        if (!LogStorage.isDevSession(this)) {
+            CloudSync.resumeSession(this, SessionDiagnostics.newProcessExits(this) +
+                    SessionDiagnostics.event("resumed", "reason" to reason, "gapMs" to now - lastTick, atMs = now))
+            handler.postDelayed(flushRunnable, CloudSync.FLUSH_INTERVAL_MS)
+        }
+        broadcastStatus(true)
+        prefs.edit().putLong(MainActivity.KEY_LAST_TICK_MS, now).apply()
+        acquireWakeLock()
+        handler.post(logRunnable)
+        startBackgroundMonitoring()
+    }
+
+    @Suppress("WakelockTimeout") // held for the whole session on purpose; released on Stop/destroy
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "NetworkLogger:logging")
+            .apply { setReferenceCounted(false); acquire() }
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
     }
 
     private fun stopLogging() {
@@ -176,6 +268,8 @@ class LoggingService : Service() {
         }
         isRunning = false
         handler.removeCallbacks(logRunnable)
+        handler.removeCallbacks(flushRunnable)
+        releaseWakeLock()
         broadcastStatus(false)
         getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
@@ -183,23 +277,19 @@ class LoggingService : Service() {
             .apply()
         stopBackgroundMonitoring()
         // Branch on the mode this session was *started* in, not the current toggle.
-        // Dev sessions were written straight into their own timestamped folder, so
-        // there's nothing to move and nothing that a later production Stop could upload.
-        if (LogStorage.isDevSession(this)) {
-            Toast.makeText(
-                applicationContext,
-                "Dev mode: logs saved to ${LogStorage.devSessionFolder(this)}",
-                Toast.LENGTH_LONG
-            ).show()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+        // Dev sessions were written straight into their own timestamped folder;
+        // production sessions have been streaming to Firestore all along, so Stop
+        // only sends the last partial batch. Firestore queues it if offline, so
+        // there's nothing to wait for before stopping the service.
+        val message = if (LogStorage.isDevSession(this)) {
+            "Dev mode: logs saved to ${LogStorage.devSessionFolder(this)}"
         } else {
-            updateNotification("Uploading logs...")
-            uploadLogsToFirebaseStorage {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
+            CloudSync.endSession(this, System.currentTimeMillis())
+            "Session sent to cloud (anything unsent syncs when back online)"
         }
+        Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     // NetworkWorker's 15-minute background_logs.csv monitor is scoped to an
@@ -413,15 +503,19 @@ class LoggingService : Service() {
     }
 
     private fun updateThroughput() {
-        val rxBytes = TrafficStats.getTotalRxBytes()
-        val txBytes = TrafficStats.getTotalTxBytes()
+        val totalRx = TrafficStats.getTotalRxBytes()
+        val totalTx = TrafficStats.getTotalTxBytes()
         val now = System.currentTimeMillis()
 
-        if (rxBytes == TrafficStats.UNSUPPORTED.toLong() || txBytes == TrafficStats.UNSUPPORTED.toLong()) {
+        if (totalRx == TrafficStats.UNSUPPORTED.toLong() || totalTx == TrafficStats.UNSUPPORTED.toLong()) {
             currentDlKbps = "N/A"
             currentUlKbps = "N/A"
             return
         }
+        // Leave out this app's own traffic (the Firestore uploads), so syncing
+        // doesn't show up as measured throughput.
+        val rxBytes = totalRx - TrafficStats.getUidRxBytes(Process.myUid()).coerceAtLeast(0)
+        val txBytes = totalTx - TrafficStats.getUidTxBytes(Process.myUid()).coerceAtLeast(0)
 
         if (lastThroughputSampleMs != 0L && lastRxBytes >= 0 && lastTxBytes >= 0) {
             val elapsedSeconds = (now - lastThroughputSampleMs) / 1000.0
@@ -600,8 +694,31 @@ class LoggingService : Service() {
     }
 
     private fun saveLog() {
-        val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        val now = System.currentTimeMillis()
         val screenState = if (isScreenOn()) "ON" else "OFF"
+        if (!LogStorage.isDevSession(this)) {
+            // Same columns as the dev CSV, but typed and with a full epoch timestamp
+            // instead of "HH:mm:ss" (no more reconstructing dates on the server).
+            val n = CloudSync::num
+            CloudSync.addSample(
+                mapOf(
+                    "ts" to now,
+                    "lat" to n(currentLat), "lon" to n(currentLon),
+                    "network" to currentNetwork, "signal" to currentSignal, "operator" to currentOperator,
+                    "mcc" to currentMCC, "mnc" to currentMNC,
+                    "pci" to n(currentPCI), "tac" to n(currentTAC), "nci" to n(currentNCI),
+                    "rsrp" to n(currentRSRP), "rsrq" to n(currentRSRQ), "sinr" to n(currentSINR),
+                    "neighborCount" to n(currentNeighborCount),
+                    "dlKbps" to n(currentDlKbps), "ulKbps" to n(currentUlKbps),
+                    "screenOn" to screenState,
+                    "arfcn" to currentBand.arfcn, "band" to currentBand.band,
+                    "bandSource" to currentBand.source, "bandwidthMHz" to currentBand.bandwidthMhz,
+                    "nrLegBand" to currentNrLegBand,
+                )
+            )
+            return
+        }
+        val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(now))
         val logLine = "$time,$currentLat,$currentLon,$currentNetwork,$currentSignal," +
                 "$currentOperator,$currentMCC,$currentMNC,$currentPCI,$currentTAC,$currentNCI," +
                 "$currentRSRP,$currentRSRQ,$currentSINR,$currentNeighborCount,$currentDlKbps,$currentUlKbps,$screenState," +
@@ -614,136 +731,6 @@ class LoggingService : Service() {
             LogStorage.appendRow(this, "network_logs", header, logLine)
         } catch (e: Exception) {
             Log.e("CSV", "saveLog() failed: ${e.message}", e)
-        }
-    }
-
-    private fun getAppVersionInfo(): Pair<String, Long> {
-        return try {
-            val info = packageManager.getPackageInfo(packageName, 0)
-            val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                info.longVersionCode
-            } else {
-                @Suppress("DEPRECATION")
-                info.versionCode.toLong()
-            }
-            Pair(info.versionName ?: "unknown", versionCode)
-        } catch (e: Exception) {
-            Pair("unknown", -1L)
-        }
-    }
-
-    private fun uploadLogsToFirebaseStorage(onComplete: () -> Unit) {
-        val currentUser = firebaseAuth.currentUser
-        if (currentUser == null) {
-            firebaseAuth.signInAnonymously()
-                .addOnSuccessListener { uploadLogsToFirebaseStorage(onComplete) }
-                .addOnFailureListener { e ->
-                    Log.e("StorageUpload", "Anonymous sign-in failed: ${e.message}", e)
-                    Toast.makeText(applicationContext, "Firebase sign-in failed", Toast.LENGTH_LONG).show()
-                    onComplete()
-                }
-            return
-        }
-
-        Toast.makeText(applicationContext, "Uploading logs to Firebase Storage...", Toast.LENGTH_SHORT).show()
-
-        val deviceId = Settings.Secure.getString(
-            contentResolver, Settings.Secure.ANDROID_ID
-        ) ?: "unknown-device"
-        val sessionId = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val (appVersionName, appVersionCode) = getAppVersionInfo()
-        val testerName = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(MainActivity.KEY_TESTER_NAME, "")
-            ?.trim()
-            ?.ifEmpty { "Unknown" } ?: "Unknown"
-
-        val metadata = StorageMetadata.Builder()
-            .setCustomMetadata("testerName", testerName)
-            .setCustomMetadata("deviceId", deviceId)
-            .setCustomMetadata("deviceModel", Build.MODEL)
-            .setCustomMetadata("manufacturer", Build.MANUFACTURER)
-            .setCustomMetadata("androidVersion", Build.VERSION.RELEASE)
-            .setCustomMetadata("sdkInt", Build.VERSION.SDK_INT.toString())
-            .setCustomMetadata("appVersionName", appVersionName)
-            .setCustomMetadata("appVersionCode", appVersionCode.toString())
-            .setCustomMetadata("sessionId", sessionId)
-            .setCustomMetadata("uploadedAtEpochMs", System.currentTimeMillis().toString())
-            .build()
-
-        val filesToUpload = listOf("network_logs.csv", "background_logs.csv")
-        var uploadedCount = 0
-        var processedCount = 0
-
-        fun onFileProcessed() {
-            processedCount++
-            if (processedCount == filesToUpload.size) {
-                val message = when {
-                    uploadedCount == filesToUpload.size -> "Uploaded both log files to Firebase Storage"
-                    uploadedCount > 0 -> "Uploaded $uploadedCount log file(s) to Firebase Storage"
-                    else -> "No logs found to upload"
-                }
-                Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
-                onComplete()
-            }
-        }
-
-        filesToUpload.forEach { fileName ->
-            val localUri = findDownloadFileUri(fileName)
-            if (localUri == null) {
-                Log.w("StorageUpload", "File not found in Downloads: $fileName")
-                onFileProcessed()
-                return@forEach
-            }
-            val inputStream = contentResolver.openInputStream(localUri)
-            if (inputStream == null) {
-                Log.w("StorageUpload", "Cannot open file stream: $fileName")
-                onFileProcessed()
-                return@forEach
-            }
-
-            val storageRef = firebaseStorage.reference
-                .child("logs/${currentUser.uid}/$deviceId/$sessionId/$fileName")
-            storageRef.putStream(inputStream, metadata)
-                .addOnSuccessListener {
-                    uploadedCount++
-                    Log.d("StorageUpload", "Uploaded file to Firebase Storage: $fileName")
-                    resetLocalCsv(localUri)
-                    onFileProcessed()
-                }
-                .addOnFailureListener { e ->
-                    Log.e("StorageUpload", "Upload failed for $fileName: ${e.message}", e)
-                    onFileProcessed()
-                }
-        }
-    }
-
-    private fun resetLocalCsv(uri: Uri) {
-        try {
-            contentResolver.delete(uri, null, null)
-            Log.d("CSV", "Cleared local file after upload: $uri")
-        } catch (e: Exception) {
-            Log.w("CSV", "Failed to clear local file after upload: ${e.message}")
-        }
-    }
-
-    private fun findDownloadFileUri(fileName: String): Uri? {
-        val resolver = contentResolver
-        val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        return resolver.query(
-            collection,
-            arrayOf(MediaStore.Downloads._ID),
-            "${MediaStore.Downloads.DISPLAY_NAME} = ?",
-            arrayOf(fileName),
-            null
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                ContentUris.withAppendedId(
-                    collection,
-                    cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID))
-                )
-            } else {
-                null
-            }
         }
     }
 }

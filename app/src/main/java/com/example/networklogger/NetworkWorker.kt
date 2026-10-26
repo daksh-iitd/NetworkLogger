@@ -38,6 +38,35 @@ class NetworkWorker(
         // trips this — only a genuinely dead LoggingService should.
         private const val WATCHDOG_THRESHOLD_MS = 10 * 60 * 1000L
         private const val WATCHDOG_NOTIFICATION_ID = 3001
+
+        fun notifyLoggingStopped(context: Context) {
+            val channelId = "network_logger_watchdog_channel"
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                val channel = android.app.NotificationChannel(
+                    channelId, "Logging Alerts", android.app.NotificationManager.IMPORTANCE_HIGH
+                )
+                context.getSystemService(android.app.NotificationManager::class.java)
+                    .createNotificationChannel(channel)
+            }
+
+            val openAppIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            val contentPendingIntent = android.app.PendingIntent.getActivity(
+                context, 0, openAppIntent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notification = NotificationCompat.Builder(context, channelId)
+                .setContentTitle("NetworkLogger stopped unexpectedly")
+                .setContentText("Logging isn't active anymore. Tap to reopen and restart it.")
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(contentPendingIntent)
+                .build()
+
+            context.getSystemService(android.app.NotificationManager::class.java)
+                .notify(WATCHDOG_NOTIFICATION_ID, notification)
+        }
     }
 
     private var batteryPercent = 0
@@ -102,48 +131,58 @@ class NetworkWorker(
         val staleMs = System.currentTimeMillis() - lastTick
         if (staleMs < WATCHDOG_THRESHOLD_MS) return
 
+        // Same process and the service still claims to run: it's alive but its timer was
+        // held up (deep sleep), so there's nothing to restart.
+        if (LoggingService.isRunning) return
+
         Log.w("NetworkWorker", "Logging watchdog: no tick in ${staleMs / 1000}s — session appears to have died")
+        val ctx = applicationContext
+        val dev = LogStorage.isDevSession(ctx)
+        // Android's own record of why the app's process ended (e.g. a Play services update)
+        if (!dev) CloudSync.recordEvents(ctx, SessionDiagnostics.newProcessExits(ctx) +
+                SessionDiagnostics.event("watchdog_detected", "lastTickMs" to lastTick))
+
+        // Try to pick the session back up. Started from the background, the service needs
+        // the battery-optimisation exemption (Android 12+) and "Allow all the time" location
+        // (Android 11+, or it couldn't read GPS/cells); without them, fall back to the alert.
+        if (canResumeFromBackground(ctx)) {
+            try {
+                ContextCompat.startForegroundService(ctx, Intent(ctx, LoggingService::class.java).apply {
+                    action = LoggingService.ACTION_RESUME
+                    putExtra(LoggingService.EXTRA_RESUME_REASON, "watchdog")
+                })
+                Log.i("NetworkWorker", "Logging watchdog: restart requested")
+                return
+            } catch (e: Throwable) {
+                Log.w("NetworkWorker", "Logging watchdog: restart refused: ${e.message}")
+                if (!dev) CloudSync.recordEvents(ctx, listOf(SessionDiagnostics.event(
+                    "resume_failed", "reason" to "watchdog", "error" to e.javaClass.simpleName)))
+            }
+        } else if (!dev) {
+            CloudSync.recordEvents(ctx, listOf(SessionDiagnostics.event("resume_skipped", "reason" to "no_background_permission")))
+        }
 
         // Stop reporting an active session so this doesn't re-fire every 15 minutes.
         prefs.edit().putBoolean(MainActivity.KEY_SESSION_ACTIVE, false).apply()
+        if (!dev) CloudSync.endSession(ctx, lastTick, status = "died")
 
         // Let MainActivity know too, in case it's open and showing a stale "logging" state.
         val statusIntent = Intent(LoggingService.ACTION_STATUS_CHANGED).apply {
-            setPackage(applicationContext.packageName)
+            setPackage(ctx.packageName)
             putExtra(LoggingService.EXTRA_IS_RUNNING, false)
         }
-        applicationContext.sendBroadcast(statusIntent)
+        ctx.sendBroadcast(statusIntent)
 
-        postWatchdogNotification()
+        notifyLoggingStopped(ctx)
     }
 
-    private fun postWatchdogNotification() {
-        val channelId = "network_logger_watchdog_channel"
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            val channel = android.app.NotificationChannel(
-                channelId, "Logging Alerts", android.app.NotificationManager.IMPORTANCE_HIGH
-            )
-            applicationContext.getSystemService(android.app.NotificationManager::class.java)
-                .createNotificationChannel(channel)
-        }
-
-        val openAppIntent = applicationContext.packageManager.getLaunchIntentForPackage(applicationContext.packageName)
-        val contentPendingIntent = android.app.PendingIntent.getActivity(
-            applicationContext, 0, openAppIntent,
-            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notification = NotificationCompat.Builder(applicationContext, channelId)
-            .setContentTitle("NetworkLogger stopped unexpectedly")
-            .setContentText("Logging isn't active anymore. Tap to reopen and restart it.")
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true)
-            .setContentIntent(contentPendingIntent)
-            .build()
-
-        applicationContext.getSystemService(android.app.NotificationManager::class.java)
-            .notify(WATCHDOG_NOTIFICATION_ID, notification)
+    private fun canResumeFromBackground(ctx: Context): Boolean {
+        val pm = ctx.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        val exempt = pm.isIgnoringBatteryOptimizations(ctx.packageName)
+        val location = android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R ||
+            ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        return exempt && location
     }
 
 
@@ -352,6 +391,22 @@ class NetworkWorker(
     }
 
     private fun saveBackgroundLog() {        try {
+            if (!LogStorage.isDevSession(applicationContext)) {
+                CloudSync.addBackgroundRow(
+                    applicationContext,
+                    mapOf(
+                        "ts" to System.currentTimeMillis(),
+                        "battery" to batteryPercent,
+                        "networkType" to networkType, "operator" to operatorName,
+                        "signalLevel" to signalLevel, "cellId" to cellId, "tac" to tac,
+                        "totalStorageGB" to totalStorageGB, "usedStorageGB" to usedStorageGB,
+                        "freeStorageGB" to freeStorageGB,
+                        "totalRamGB" to totalRamGB, "usedRamGB" to usedRamGB, "availableRamGB" to availableRamGB,
+                        "screenOn" to if (isScreenOn()) "ON" else "OFF",
+                    )
+                )
+                return
+            }
             val header = "Time,Battery,NetworkType,Operator,SignalLevel,CellID,TAC," +
                     "TotalStorage,UsedStorage,FreeStorage,TotalRAM,UsedRAM,AvailableRAM,ScreenOn\n"
 

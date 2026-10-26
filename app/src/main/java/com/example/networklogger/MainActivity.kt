@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.os.Build
@@ -41,10 +42,14 @@ class MainActivity : AppCompatActivity() {
         const val KEY_SESSION_ACTIVE = "session_active"
         const val KEY_LAST_TICK_MS = "last_tick_ms"
 
-        // Developer mode: on Stop, logs are archived into a timestamped folder under
-        // Downloads instead of being uploaded to Firebase. Defaults to ON, so a fresh
-        // install never uploads until someone explicitly switches to production.
+        // Developer mode: logs are written into a timestamped folder under Downloads
+        // instead of being streamed to Firestore. Defaults to ON, so a fresh install
+        // never uploads until someone explicitly switches to production.
         const val KEY_DEV_MODE = "dev_mode"
+
+        private const val KEY_ASKED_BACKGROUND_LOCATION = "asked_background_location"
+        private const val REQUEST_PERMISSIONS = 1
+        private const val REQUEST_BACKGROUND_LOCATION = 2
 
         // The public build has no dev mode at all: always production, whatever an
         // earlier install may have left in preferences.
@@ -65,6 +70,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var networkLogPathText: TextView
     private lateinit var backgroundLogPathText: TextView
     private lateinit var telephonyManager: TelephonyManager
+    private lateinit var loggingButton: Button
 
     private var isLogging = false
 
@@ -84,6 +90,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 LoggingService.ACTION_STATUS_CHANGED -> {
                     isLogging = intent.getBooleanExtra(LoggingService.EXTRA_IS_RUNNING, false)
+                    updateLoggingButton()
                 }
             }
         }
@@ -104,8 +111,7 @@ class MainActivity : AppCompatActivity() {
         networkLogPathText  = findViewById(R.id.networkLogPathText)
         backgroundLogPathText = findViewById(R.id.backgroundLogPathText)
 
-        val startButton = findViewById<Button>(R.id.startButton)
-        val stopButton  = findViewById<Button>(R.id.stopButton)
+        loggingButton = findViewById(R.id.loggingButton)
         val testerNameInput = findViewById<EditText>(R.id.testerNameInput)
         val saveNameButton = findViewById<Button>(R.id.saveNameButton)
 
@@ -141,7 +147,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(
                 this,
                 if (devMode) "Developer mode ON — logs stay on this device"
-                else "Production mode — logs upload to Firebase on stop",
+                else "Production mode — logs stream to the cloud every minute",
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -150,26 +156,24 @@ class MainActivity : AppCompatActivity() {
             findViewById<View>(R.id.modeBar).visibility = View.GONE
         }
 
-        startButton.setOnClickListener {
+        loggingButton.setOnClickListener {
             if (!isLogging) {
                 loggingDurationText.text = "00:00:00"
                 Toast.makeText(this, "Logs are started", Toast.LENGTH_SHORT).show()
-                ContextCompat.startForegroundService(
-                    this,
-                    Intent(this, LoggingService::class.java).apply { action = LoggingService.ACTION_START }
-                )
             }
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, LoggingService::class.java).apply {
+                    action = if (isLogging) LoggingService.ACTION_STOP else LoggingService.ACTION_START
+                }
+            )
+            // Flip right away so a quick second tap means "stop", not another "start";
+            // the service's status broadcast confirms (or corrects) it moments later.
+            isLogging = !isLogging
+            updateLoggingButton()
         }
 
-        stopButton.setOnClickListener {
-            if (isLogging) {
-                ContextCompat.startForegroundService(
-                    this,
-                    Intent(this, LoggingService::class.java).apply { action = LoggingService.ACTION_STOP }
-                )
-            }
-        }
-
+        CloudSync.init()
         requestPermissions()
         setupSignalListener()
         requestBatteryOptimizationExemption()
@@ -178,6 +182,7 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         isLogging = LoggingService.isRunning
+        updateLoggingButton()
         val filter = IntentFilter().apply {
             addAction(LoggingService.ACTION_UPDATE)
             addAction(LoggingService.ACTION_STATUS_CHANGED)
@@ -188,6 +193,12 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         unregisterReceiver(updateReceiver)
+    }
+
+    private fun updateLoggingButton() {
+        loggingButton.text = if (isLogging) "⏹  STOP LOGGING" else "▶  START LOGGING"
+        loggingButton.backgroundTintList =
+            ColorStateList.valueOf(Color.parseColor(if (isLogging) "#EF4444" else "#10B981"))
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -210,7 +221,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.modeBar).setBackgroundColor(modeBar)
         findViewById<TextView>(R.id.modeText).apply {
             text = if (devMode) "DEVELOPER MODE\nLogs stay on this device"
-                   else "PRODUCTION MODE\nLogs upload to Firebase on stop"
+                   else "PRODUCTION MODE\nLogs stream to the cloud every minute"
             setTextColor(modeText)
         }
         findViewById<Button>(R.id.devModeButton).apply {
@@ -221,11 +232,11 @@ class MainActivity : AppCompatActivity() {
         networkLogPathText.text = if (devMode)
             "Each session  →  /storage/emulated/0/Download/NetworkLogger/session_<start time>/"
         else
-            "network_logs.csv  →  /storage/emulated/0/Download/network_logs.csv"
+            "Samples  →  Firestore, sent every minute (queued while offline)"
         backgroundLogPathText.text = if (devMode)
             "network_logs_<time>.csv + background_logs_<time>.csv"
         else
-            "background_logs.csv  →  /storage/emulated/0/Download/background_logs.csv"
+            "No CSV files are kept on the phone in production mode"
 
         recolorTree(findViewById(R.id.rootScroll), card, pathsCard, accent)
     }
@@ -440,7 +451,36 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
-        ActivityCompat.requestPermissions(this, permissions.toTypedArray(), 1)
+        ActivityCompat.requestPermissions(this, permissions.toTypedArray(), REQUEST_PERMISSIONS)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_PERMISSIONS) requestBackgroundLocation()
+    }
+
+    // "Allow all the time" location lets the watchdog resume a session Android killed:
+    // a service restarted from the background can't read GPS or cells without it. It has
+    // to be asked for on its own, after foreground location (Android 11+ opens Settings).
+    private fun requestBackgroundLocation() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val granted = { p: String -> ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED }
+        if (!granted(Manifest.permission.ACCESS_FINE_LOCATION) || granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION)) return
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_ASKED_BACKGROUND_LOCATION, false)) return
+        prefs.edit().putBoolean(KEY_ASKED_BACKGROUND_LOCATION, true).apply()
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Keep logging after interruptions")
+            .setMessage("If Android stops NetworkLogger during a session (for example when Google Play " +
+                    "services updates), it can restart logging by itself, but only with location access " +
+                    "\"Allow all the time\". Choose that option on the next screen.")
+            .setPositiveButton("Continue") { _, _ ->
+                ActivityCompat.requestPermissions(
+                    this, arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION), REQUEST_BACKGROUND_LOCATION
+                )
+            }
+            .setNegativeButton("Not now", null)
+            .show()
     }
 
     private fun setupSignalListener() {

@@ -562,33 +562,17 @@
             android:paddingEnd="16dp"
             android:paddingTop="20dp">
 
+            <!-- One toggle: text and colour are set from MainActivity.updateLoggingButton() -->
             <com.google.android.material.button.MaterialButton
-                android:id="@+id/startButton"
-                android:layout_width="0dp"
+                android:id="@+id/loggingButton"
+                android:layout_width="match_parent"
                 android:layout_height="56dp"
-                android:layout_weight="1"
-                android:layout_marginEnd="8dp"
                 android:text="▶  START LOGGING"
                 android:textColor="#FFFFFF"
                 android:textSize="13sp"
                 android:textStyle="bold"
                 android:letterSpacing="0.05"
                 android:backgroundTint="#10B981"
-                android:stateListAnimator="@null"
-                app:cornerRadius="12dp" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/stopButton"
-                android:layout_width="0dp"
-                android:layout_height="56dp"
-                android:layout_weight="1"
-                android:layout_marginStart="8dp"
-                android:text="⏹  STOP LOGGING"
-                android:textColor="#FFFFFF"
-                android:textSize="13sp"
-                android:textStyle="bold"
-                android:letterSpacing="0.05"
-                android:backgroundTint="#EF4444"
                 android:stateListAnimator="@null"
                 app:cornerRadius="12dp" />
         </LinearLayout>
