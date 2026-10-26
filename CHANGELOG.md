@@ -4,6 +4,24 @@ All notable changes to NetworkLogger are documented here, organized by version.
 
 ---
 
+## [Unreleased]
+
+### Changed
+- **Production mode streams to Cloud Firestore** (`CloudSync.kt`) instead of writing `Download/*.csv` and uploading the files to Firebase Storage on Stop. Samples are batched into one document per minute under `users/<uid>/sessions/<sessionId>/batches`; background rows go to `…/background`. Firestore's offline queue holds batches while there's no signal.
+- Firestore rows carry an epoch-ms `ts` and typed numeric values; the session id is the **start** time (`<ANDROID_ID>_yyyyMMdd_HHmmss`)
+- Throughput (`dlKbps`/`ulKbps`) now excludes the app's own traffic
+- The watchdog marks a dead production session `status: "died"` in Firestore
+- `firebase-storage` dependency replaced by `firebase-firestore`; security rules in `firestore.rules`
+- **Live dashboards**: `grafana_pipeline/firestore_listener.py` streams Firestore batches into InfluxDB as they arrive; new **NetworkLogger Live** Grafana dashboard (last hour, 10 s refresh). InfluxDB data moved into `grafana_pipeline/influx_data/` with 180-day retention
+- **Lab server deployment** (`server/`): InfluxDB, Grafana and the listener without Docker or sudo, through the IITD proxy, kept alive by a cron watchdog; dashboards view-only for the IITD network at `tejas.cse.iitd.ac.in:3300`
+- **Robustness analysis** (`presentation_charts/robustness/`): charts of when and why logging stopped, sampling gaps and upload delay (13–26 Oct 2026)
+- Start and Stop merged into one full-width button (green START LOGGING / red STOP LOGGING)
+- **Partial wake lock while logging**, so the 5 s timer keeps running when the idle phone sleeps (most >1 min gaps were Doze)
+- **Sessions resume instead of dying**: the watchdog restarts a killed logging service and continues the same session (same id, batch numbering continued; needs battery-optimisation exemption and "Allow all the time" location, which the app now asks for). A restart by Android itself also continues the session instead of starting a new one.
+- **Self-diagnosis**: each session's `events` array records why logging stopped — Android's process-exit reason (e.g. a Google Play services update), service destroyed without Stop, app swiped away, foreground-service timeout, and every resume with its gap
+
+---
+
 ## [v0.6] — October 2026
 
 ### Added

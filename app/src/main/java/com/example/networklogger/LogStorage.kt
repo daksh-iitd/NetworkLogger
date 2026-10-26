@@ -14,12 +14,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// Decides where a session's CSV rows go, shared by LoggingService (network_logs)
-// and NetworkWorker (background_logs).
+// Session mode plus the developer-mode CSV files, shared by LoggingService
+// (network_logs) and NetworkWorker (background_logs).
 //
 // The mode is captured once when a session starts, so dev-mode data can never end
-// up in the production files that get uploaded:
-//  - production session → Download/<base>.csv, uploaded to Firebase on Stop
+// up in the cloud:
+//  - production session → streamed to Firestore by CloudSync, no CSV on the phone
 //  - developer session  → Download/NetworkLogger/session_<start>/<base>_<start>.csv,
 //                         written there directly and never uploaded
 object LogStorage {
@@ -42,13 +42,11 @@ object LogStorage {
     fun devSessionFolder(context: Context): String =
         "${Environment.DIRECTORY_DOWNLOADS}/NetworkLogger/session_${prefs(context).getString(KEY_SESSION_STAMP, "unknown")}/"
 
+    // Developer sessions only; production rows go to CloudSync instead.
     fun appendRow(context: Context, baseName: String, header: String, row: String) {
-        val (fileName, relativePath) = if (isDevSession(context)) {
-            val stamp = prefs(context).getString(KEY_SESSION_STAMP, "unknown")
-            "${baseName}_$stamp.csv" to devSessionFolder(context)
-        } else {
-            "$baseName.csv" to "${Environment.DIRECTORY_DOWNLOADS}/"
-        }
+        val stamp = prefs(context).getString(KEY_SESSION_STAMP, "unknown")
+        val fileName = "${baseName}_$stamp.csv"
+        val relativePath = devSessionFolder(context)
 
         val resolver = context.contentResolver
         val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
@@ -70,7 +68,7 @@ object LogStorage {
         if (existingUri != null && !headerMatches(resolver, existingUri, header)) {
             // Written by an app version with different columns (e.g. before band
             // logging). Appending would put rows under the wrong header, so move the
-            // old file aside — it keeps its data but is no longer the live/uploaded file.
+            // old file aside — it keeps its data but is no longer the live file.
             val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault()).format(Date())
             resolver.update(existingUri, ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, "${baseName}_old-format_$stamp.csv")

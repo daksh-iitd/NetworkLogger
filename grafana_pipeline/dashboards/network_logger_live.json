@@ -1,0 +1,362 @@
+{
+  "uid": "networklogger-live",
+  "title": "NetworkLogger Live",
+  "tags": [
+    "networklogger",
+    "live"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "10s",
+  "templating": {
+    "list": [
+      {
+        "name": "deviceId",
+        "label": "Device",
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "P7C70A67DE99A08E6"
+        },
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"network_logs_v2\", tag: \"deviceId\", start: -365d)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "refresh": 1,
+        "sort": 1,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Latest RSRP per phone",
+      "description": "Most recent RSRP from each phone in the time range.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P7C70A67DE99A08E6"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P7C70A67DE99A08E6"
+          },
+          "query": "from(bucket: \"network_logs_v2\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_log\")\n  |> filter(fn: (r) => r.deviceId =~ /^${deviceId:regex}$/)\n  |> filter(fn: (r) => r._field == \"rsrp\")\n  |> group(columns: [\"deviceModel\", \"testerName\"])\n  |> keep(columns: [\"_time\", \"_value\", \"deviceModel\", \"testerName\"])\n  |> last()"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dBm",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d7301f",
+                "value": null
+              },
+              {
+                "color": "#fc8d59",
+                "value": -110
+              },
+              {
+                "color": "#fee08b",
+                "value": -100
+              },
+              {
+                "color": "#91bfdb",
+                "value": -90
+              },
+              {
+                "color": "#2c7bb6",
+                "value": -80
+              }
+            ]
+          },
+          "displayName": "${__field.labels.deviceModel} (${__field.labels.testerName})"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 1,
+      "type": "geomap",
+      "title": "Where the phones are now \u2014 RSRP",
+      "description": "Every sample in the time range, coloured by RSRP. Phones send a batch every minute, so the newest points are up to ~1 minute old.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P7C70A67DE99A08E6"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 14,
+        "h": 18
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P7C70A67DE99A08E6"
+          },
+          "query": "from(bucket: \"network_logs_v2\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_log\")\n  |> filter(fn: (r) => true)\n  |> filter(fn: (r) => r.deviceId =~ /^${deviceId:regex}$/)\n  |> filter(fn: (r) => r._field == \"lat\" or r._field == \"lon\" or r._field == \"rsrp\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.lat and exists r.lon and exists r.rsrp)\n  |> group()\n  |> keep(columns: [\"_time\", \"lat\", \"lon\", \"rsrp\", \"band\", \"op\", \"deviceModel\", \"testerName\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dBm",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d7301f",
+                "value": null
+              },
+              {
+                "color": "#fc8d59",
+                "value": -110
+              },
+              {
+                "color": "#fee08b",
+                "value": -100
+              },
+              {
+                "color": "#91bfdb",
+                "value": -90
+              },
+              {
+                "color": "#2c7bb6",
+                "value": -80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "view": {
+          "id": "fit",
+          "allLayers": true,
+          "lastOnly": false,
+          "padding": 10,
+          "lat": 28.5465,
+          "lon": 77.1885,
+          "zoom": 15
+        },
+        "controls": {
+          "showZoom": true,
+          "mouseWheelZoom": true,
+          "showAttribution": true
+        },
+        "basemap": {
+          "type": "default",
+          "name": "Basemap",
+          "config": {}
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "Where the phones are now \u2014 RSRP",
+            "tooltip": true,
+            "location": {
+              "mode": "coords",
+              "latitude": "lat",
+              "longitude": "lon"
+            },
+            "config": {
+              "showLegend": true,
+              "style": {
+                "size": {
+                  "fixed": 4
+                },
+                "color": {
+                  "field": "rsrp",
+                  "fixed": "dark-green"
+                },
+                "opacity": 0.8,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "RSRP",
+      "description": "Serving-cell RSRP per phone.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P7C70A67DE99A08E6"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 4,
+        "w": 10,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P7C70A67DE99A08E6"
+          },
+          "query": "from(bucket: \"network_logs_v2\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_log\")\n  |> filter(fn: (r) => r.deviceId =~ /^${deviceId:regex}$/)\n  |> filter(fn: (r) => r._field == \"rsrp\")\n  |> group(columns: [\"deviceModel\", \"testerName\"])\n  |> keep(columns: [\"_time\", \"_value\", \"deviceModel\", \"testerName\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dBm",
+          "displayName": "${__field.labels.deviceModel} (${__field.labels.testerName})",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "always",
+            "spanNulls": 60000,
+            "thresholdsStyle": {
+              "mode": "area"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d7301f",
+                "value": null
+              },
+              {
+                "color": "#fc8d59",
+                "value": -110
+              },
+              {
+                "color": "#fee08b",
+                "value": -100
+              },
+              {
+                "color": "#91bfdb",
+                "value": -90
+              },
+              {
+                "color": "#2c7bb6",
+                "value": -80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Throughput",
+      "description": "Device DL/UL throughput, excluding the app's own uploads.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P7C70A67DE99A08E6"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 13,
+        "w": 10,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P7C70A67DE99A08E6"
+          },
+          "query": "from(bucket: \"network_logs_v2\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_log\")\n  |> filter(fn: (r) => r.deviceId =~ /^${deviceId:regex}$/)\n  |> filter(fn: (r) => r._field == \"dlKbps\" or r._field == \"ulKbps\")\n  |> group(columns: [\"deviceModel\", \"_field\"])\n  |> keep(columns: [\"_time\", \"_value\", \"deviceModel\", \"_field\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Kbits",
+          "displayName": "${__field.labels.deviceModel} ${__field.labels._field}",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "always",
+            "spanNulls": 60000
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    }
+  ]
+}

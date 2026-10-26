@@ -4,9 +4,22 @@ Planned features and improvements for NetworkLogger.
 
 ---
 
+## Done
+
+- **Cloud synchronization** — production sessions stream to Cloud Firestore every minute (offline-safe), replacing CSV uploads on Stop
+- **Coverage maps** — campus RSRP and band maps (`presentation_charts/`) and the Grafana map dashboard
+- **Live dashboard** — Grafana updates about a minute behind the phones; runs on the lab server for anyone on the IITD network
+- **Multi-device aggregation** — all phones' sessions in one InfluxDB bucket, filterable by device and operator
+- **Operator benchmarking** — Jio vs Vi controlled experiment and same-spot comparisons
+- **Robustness** — wake lock, automatic session resume, recorded causes of stops, robustness charts
+
+---
+
 ## Short Term
 
-- **Coverage heatmap** — overlay GPS coordinates + RSRP values on Google Maps to visualize signal strength across a walking route
+- **Faster recovery** — notice a killed session sooner than the 15-minute watchdog, and keep unsent samples on disk so a kill loses nothing
+- **Robustness charts from session events** — break stops down by the recorded cause
+- **Read-only Firestore key on the server** — replace the admin key used by the lab server's listener
 - **Signal drop alerts** — push notification when RSRP falls below a user-configured threshold (e.g. below -110 dBm)
 - **Export button** — one-tap share of CSV files via email, WhatsApp, or Google Drive from inside the app
 - **Session summary** — show min/max/average RSRP after tapping Stop Logging
@@ -15,7 +28,6 @@ Planned features and improvements for NetworkLogger.
 
 ## Medium Term
 
-- **Cloud synchronization** — auto-upload CSV files to Firebase or Google Drive after each logging session
 - **Excel/chart export** — auto-generate RSRP vs time line chart as an image or Excel file
 - **Multi-session view** — browse and compare data from previous logging sessions inside the app
 - **Configurable logging interval** — let user set interval from 1 second to 60 seconds instead of fixed 5 seconds
@@ -24,9 +36,8 @@ Planned features and improvements for NetworkLogger.
 
 ## Long Term
 
-- **Multi-device aggregation** — collect signal data from multiple phones simultaneously and merge into one dataset
 - **Network quality score** — estimate Mean Opinion Score (MOS) from RSRP / RSRQ / SINR using standard 3GPP formulas
-- **Operator benchmarking** — collect and compare JIO vs Airtel vs Vi signal on the same route side by side
+- **Operator benchmarking with Airtel** — add Airtel to the Jio vs Vi comparisons
 - **Indoor vs outdoor detection** — correlate GPS accuracy with signal degradation to infer indoor/outdoor state
 - **Automatic report generation** — generate a PDF summary report from logged CSV data
 

@@ -113,7 +113,7 @@ If it shows **"No devices"** even after plugging in:
 
 0. Choose the build variant: **Build → Select Build Variant** →
     - `internalDebug` — research version with the Developer/Production mode toggle
-    - `publicRelease` — version for ordinary users (no developer mode, always uploads)
+    - `publicRelease` — version for ordinary users (no developer mode, always streams to the cloud)
 1. In Android Studio, click the **green triangle ▶ Run button** at the top (or press `Shift + F10`)
 2. A dialog may appear asking which device to install on — select your phone and click **OK**
 3. Android Studio will compile the code and install the app on your phone (takes 1–3 minutes)
@@ -136,7 +136,12 @@ When the app opens for the first time, it will ask for permissions one by one:
 - The app only uses this to read network type and signal data
 - Tap **Allow**
 
-**3. Battery optimization**
+**3. Location "Allow all the time"**
+- A short explanation appears ("Keep logging after interruptions"), then Android asks again about location
+- Choose **Allow all the time** (on Android 11+ this opens the app's location settings)
+- This lets the app restart logging by itself if Android stops it during a session (for example when Google Play services updates). Without it everything else works, but you get a notification and have to restart by hand
+
+**4. Battery optimization**
 - A dialog will appear asking to allow the app to run in the background
 - Tap **Allow**
 - This is needed so the background logging keeps working even when the phone screen is off
@@ -149,6 +154,8 @@ These steps ensure the background logging works correctly and does not get stopp
 
 1. Go to **Settings → Apps → NetworkLogger → Battery**
 2. Select **No Restrictions** (or "Unrestricted")
+
+On **Samsung**: Settings → Battery and device care → Battery → **Background usage limits** → add NetworkLogger to **Never sleeping apps**, and consider turning off **Auto optimise daily** (it closes background apps around 3 am).
 
 If your phone has an **Autostart** option (common on Realme, Xiaomi, OPPO phones):
 1. Search **"Autostart"** in Settings
@@ -165,22 +172,23 @@ Once the app is open and permissions are granted:
 **Choose a mode (internal build only):**
 - The bar under the header shows **DEVELOPER MODE** (amber app colours) or **PRODUCTION MODE** (navy)
 - A fresh install starts in **Developer mode** — logs stay on the phone and nothing is uploaded
-- Tap **Switch to Production** to upload sessions to Firebase instead (you can't switch while logging)
+- Tap **Switch to Production** to stream sessions to the cloud instead (you can't switch while logging)
 - Enter your name under **Tester Profile** and tap **Save** — it is attached to uploaded sessions
 
 **To start logging:**
-- Tap the green **START LOGGING** button
+- Tap the green **START LOGGING** button — it turns red and becomes **STOP LOGGING**
 - The app records network data every 5 seconds, also in the background (a notification shows it is running)
 - You will see the logging duration timer counting up
 
 **To stop logging:**
-- Tap the red **STOP LOGGING** button (or **Stop Logging** in the notification)
-- Production mode: the session uploads to Firebase, then the local files are cleared
+- Tap the same button, now red **STOP LOGGING** (or **Stop Logging** in the notification)
+- Production mode: the data has been sent every minute during the session; Stop sends the last minute
+- If Android stops logging during a session, the app resumes the same session by itself (within about 10–25 minutes, or right away when Android restarts it); you only get a notification if it can't
 
 **To find the recorded data:**
 - Open the **Files** app on the phone and go to **Downloads**
 - Developer mode: `NetworkLogger/session_<start time>/` holds `network_logs_<start time>.csv` and `background_logs_<start time>.csv` for each session
-- Production mode: `network_logs.csv` and `background_logs.csv` (only until they are uploaded)
+- Production mode: nothing on the phone — the data is in Firestore and on the Grafana dashboards (http://tejas.cse.iitd.ac.in:3300/d/networklogger-live on the IITD network)
 
 **To open the CSV files on a laptop:**
 - Connect phone to laptop
@@ -241,7 +249,7 @@ This is normal and temporary. The phone's modem refreshes cell tower data every 
 
 ---
 
-### Background_logs.csv has very few rows
+### Background_logs.csv has very few rows (developer mode)
 
 The background worker runs every 15 minutes automatically. If you only ran the app for a short time, there will only be 1–2 rows. Leave the phone running for an hour to see multiple rows.
 
@@ -271,9 +279,11 @@ Transfer the APK to the phone and open it to install.
 | Folder / File | What's inside |
 |--------------|--------------|
 | `app/src/main/java/.../MainActivity.kt` | Main screen, permissions, developer-mode toggle, root detection |
-| `app/src/main/java/.../LoggingService.kt` | Foreground service: GPS + cell sampling every 5 s, upload on Stop |
-| `app/src/main/java/.../NetworkWorker.kt` | Background worker — battery, RAM, storage, network; session watchdog |
-| `app/src/main/java/.../LogStorage.kt` | Decides where CSV rows go (developer folder vs Downloads) |
+| `app/src/main/java/.../LoggingService.kt` | Foreground service: GPS + cell sampling every 5 s, wake lock, resumes killed sessions |
+| `app/src/main/java/.../NetworkWorker.kt` | Background worker — battery, RAM, storage, network; session watchdog that restarts logging |
+| `app/src/main/java/.../LogStorage.kt` | Session mode; developer-mode CSV files |
+| `app/src/main/java/.../CloudSync.kt` | Production mode: sends a batch of samples to Firestore every minute |
+| `app/src/main/java/.../SessionDiagnostics.kt` | Records why logging stopped (Android's exit reasons) on the session |
 | `app/src/main/java/.../BandInfo.kt` | Works out the serving cell's frequency band |
 | `app/src/main/res/layout/activity_main.xml` | The UI layout of the app screen |
 | `app/src/main/AndroidManifest.xml` | App permissions and configuration |

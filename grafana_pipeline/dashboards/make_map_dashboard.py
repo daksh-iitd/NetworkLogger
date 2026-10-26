@@ -27,15 +27,17 @@ BAND_COLORS = {"B5": "#eb6834", "B8": "#eb6834", "n28": "#eb6834",
                "B40": "#2a78d6", "B41": "#2a78d6", "n78": "#2a78d6"}
 
 
-def query(op_filter, fields=("lat", "lon", "rsrp"), keep=("_time", "lat", "lon", "rsrp", "band", "deviceModel")):
+def query(op_filter, fields=("lat", "lon", "rsrp"), keep=("_time", "lat", "lon", "rsrp", "band", "deviceModel"),
+          band_filter=True):
     field_or = " or ".join(f'r._field == "{f}"' for f in fields)
     exists = " and ".join(f"exists r.{f}" for f in fields)
     keep_cols = ", ".join(f'"{c}"' for c in keep)
+    # Only dashboards that define a $band variable may filter on it
+    band = '\n  |> filter(fn: (r) => r.band =~ /^${band:regex}$/)' if band_filter else ""
     return f'''from(bucket: "{BUCKET}")
   |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
   |> filter(fn: (r) => r._measurement == "network_log")
-  |> filter(fn: (r) => {op_filter})
-  |> filter(fn: (r) => r.band =~ /^${{band:regex}}$/)
+  |> filter(fn: (r) => {op_filter}){band}
   |> filter(fn: (r) => r.deviceId =~ /^${{deviceId:regex}}$/)
   |> filter(fn: (r) => {field_or})
   |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
@@ -130,7 +132,85 @@ dashboard = {
     "panels": panels,
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "network_logger_map.json")
-with open(out, "w") as f:
-    json.dump(dashboard, f, indent=2)
-print(f"wrote {out}")
+
+# ── Live dashboard: last hour, auto-refresh, fed by firestore_listener.py ──
+
+def series_query(fields, by):
+    field_or = " or ".join(f'r._field == "{f}"' for f in fields)
+    return f'''from(bucket: "{BUCKET}")
+  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+  |> filter(fn: (r) => r._measurement == "network_log")
+  |> filter(fn: (r) => r.deviceId =~ /^${{deviceId:regex}}$/)
+  |> filter(fn: (r) => {field_or})
+  |> group(columns: [{", ".join(f'"{c}"' for c in by)}])
+  |> keep(columns: ["_time", "_value", {", ".join(f'"{c}"' for c in by)}])'''
+
+
+def timeseries(pid, title, description, q, unit, grid, display_name, thresholds=None):
+    defaults = {"unit": unit, "displayName": display_name,
+                "custom": {"drawStyle": "line", "lineWidth": 2, "pointSize": 4, "showPoints": "always",
+                           "spanNulls": 60000}}
+    if thresholds:
+        defaults |= {"color": {"mode": "palette-classic"},
+                     "thresholds": {"mode": "absolute", "steps": thresholds}}
+        defaults["custom"]["thresholdsStyle"] = {"mode": "area"}
+    return {"id": pid, "type": "timeseries", "title": title, "description": description,
+            "datasource": DS, "gridPos": grid,
+            "targets": [{"refId": "A", "datasource": DS, "query": q}],
+            "fieldConfig": {"defaults": defaults, "overrides": []},
+            "options": {"legend": {"displayMode": "list", "placement": "bottom"},
+                        "tooltip": {"mode": "multi"}}}
+
+
+live_map = geomap(
+    1, "Where the phones are now — RSRP",
+    "Every sample in the time range, coloured by RSRP. Phones send a batch every minute, so the newest "
+    "points are up to ~1 minute old.",
+    query('true', keep=("_time", "lat", "lon", "rsrp", "band", "op", "deviceModel", "testerName"), band_filter=False),
+    "rsrp", {"x": 0, "y": 4, "w": 14, "h": 18}, rsrp_field_config)
+live_map["options"]["view"] = {"id": "fit", "allLayers": True, "lastOnly": False, "padding": 10, **CENTER}
+
+latest_rsrp = {
+    "id": 2, "type": "stat", "title": "Latest RSRP per phone",
+    "description": "Most recent RSRP from each phone in the time range.",
+    "datasource": DS, "gridPos": {"x": 0, "y": 0, "w": 24, "h": 4},
+    "targets": [{"refId": "A", "datasource": DS,
+                 "query": series_query(["rsrp"], ["deviceModel", "testerName"]) + "\n  |> last()"}],
+    "fieldConfig": {"defaults": {**rsrp_field_config["defaults"],
+                                 "displayName": "${__field.labels.deviceModel} (${__field.labels.testerName})"},
+                    "overrides": []},
+    "options": {"colorMode": "background", "graphMode": "none", "textMode": "value_and_name",
+                "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False}},
+}
+
+live_panels = [
+    latest_rsrp,
+    live_map,
+    timeseries(3, "RSRP", "Serving-cell RSRP per phone.",
+               series_query(["rsrp"], ["deviceModel", "testerName"]), "dBm",
+               {"x": 14, "y": 4, "w": 10, "h": 9},
+               "${__field.labels.deviceModel} (${__field.labels.testerName})", RSRP_STEPS),
+    timeseries(4, "Throughput", "Device DL/UL throughput, excluding the app's own uploads.",
+               series_query(["dlKbps", "ulKbps"], ["deviceModel", "_field"]), "Kbits",
+               {"x": 14, "y": 13, "w": 10, "h": 9},
+               "${__field.labels.deviceModel} ${__field.labels._field}"),
+]
+
+live_dashboard = {
+    "uid": "networklogger-live",
+    "title": "NetworkLogger Live",
+    "tags": ["networklogger", "live"],
+    "timezone": "browser",
+    "schemaVersion": 39,
+    "time": {"from": "now-1h", "to": "now"},
+    "refresh": "10s",
+    "templating": {"list": [variable("deviceId", "Device", "deviceId")]},
+    "panels": live_panels,
+}
+
+here = os.path.dirname(os.path.abspath(__file__))
+for name, board in [("network_logger_map.json", dashboard), ("network_logger_live.json", live_dashboard)]:
+    out = os.path.join(here, name)
+    with open(out, "w") as f:
+        json.dump(board, f, indent=2)
+    print(f"wrote {out}")

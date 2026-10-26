@@ -124,3 +124,35 @@ Esri's gray canvas also tops out around zoom level 16 -- for a very tight
 session (a few hundred meters), contextily will warn that its inferred zoom
 (17-18) isn't supported and will clamp down. The map still renders fine, just
 slightly less zoomed-in than ideal for very short/tight sessions.
+
+## App robustness charts
+
+`robustness/` measures how reliably the Firestore app version logs in the field: when and
+why sessions stopped, how much of the session time had normal 5 s sampling, and how fast
+batches reach the cloud. It reads Firestore directly (read-only, ~1 read per document) and
+needs the `*firebase-adminsdk*.json` key in the repo root:
+
+```bash
+../grafana_pipeline/venv/bin/python robustness/export_firestore.py   # → robustness/data/ (git-ignored)
+./venv/bin/python robustness/make_robustness_charts.py               # → robustness/charts/
+```
+
+| Chart | Shows |
+|---|---|
+| `01_session_timeline` | When each phone was actually logging (runs without a gap > 1 min) |
+| `02_session_outcomes` | How sessions ended: Stop, watchdog, or cut off (with/without data) |
+| `03_sampling_quality` | Share of session time with normal / slowed / gapped sampling |
+| `04_gaps_screen` | Gaps > 1 min vs screen state (almost all with the screen off) |
+| `05_gaps_by_hour` | Samsung: time lost to gaps by hour of day (overnight = Doze) |
+| `06_upload_delay` | Time from a batch's last sample to its arrival in Firestore |
+| `07_moto_restarts` | The Motorola's restart loop, zoomed into its busiest 4 hours |
+| `08_samsung_shutdowns` | Each Samsung session with the cause of its end, written out |
+
+- The causes in `08` for the three sessions that stopped on their own come from the phone's
+  process-exit history (`adb shell dumpsys activity exit-info com.example.networklogger`,
+  read 26 Oct 2026) and are written into the script (`SAMSUNG_CAUSES`). Sessions recorded by
+  the newer app version carry their causes in the session's `events` field instead.
+- Only phones on the Firestore app version are included; phones still uploading CSVs to
+  Storage have no session status.
+- "Restarted by Android" on the Motorola is inferred from the screen being off when sessions
+  started, not logged directly.
