@@ -20,5 +20,6 @@ venv/
 __pycache__/
 apk/
 grafana_pipeline/firebase_csv_mirror/
+grafana_pipeline/influx_data/
 *firebase-adminsdk*.json
 logs/
