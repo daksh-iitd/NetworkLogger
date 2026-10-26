@@ -1,6 +1,6 @@
 # NetworkLogger 📡
 
-An Android application for real-time telecom network and device monitoring. It captures cell tower parameters (including the **frequency band**), GPS location, signal strength, throughput, and device health metrics every 5 seconds — keeping logs on the phone (developer mode) or uploading each session to Firebase Storage (production mode).
+An Android application for real-time telecom network and device monitoring. It captures cell tower parameters (including the **frequency band**), GPS location, signal strength, throughput, and device health metrics every 5 seconds — keeping logs on the phone (developer mode) or streaming them to Cloud Firestore every minute while the session runs (production mode).
 
 > Developed for academic and research purposes at **IIT Delhi**
 
@@ -51,10 +51,10 @@ NetworkLogger was developed to solve these problems — providing a free, lightw
 NetworkLogger runs two logging pipelines:
 
 **Session logging (foreground service, every 5 s)**  
-The user taps **START LOGGING**. `LoggingService` — a real foreground service with a persistent notification — samples GPS, the serving cell (ID, band, RSRP/RSRQ/SINR), network type, and throughput every 5 seconds into `network_logs`. Because it is a foreground service, logging keeps running while the app is in the background (e.g. during a browsing or streaming test).
+The user taps **START LOGGING** (one button: it turns into a red **STOP LOGGING** while a session runs). `LoggingService` — a real foreground service with a persistent notification — samples GPS, the serving cell (ID, band, RSRP/RSRQ/SINR), network type, and throughput every 5 seconds into `network_logs`. Because it is a foreground service, logging keeps running while the app is in the background (e.g. during a browsing or streaming test).
 
 **Background monitoring (WorkManager, every 15 min)**  
-While a session is active, `NetworkWorker` records device health (battery, RAM, storage) and coarse network data into `background_logs`. It also acts as a **watchdog**: if a session claims to be active but has not logged for 10 minutes (the OS killed it), it posts a notification so the tester can restart.
+While a session is active, `NetworkWorker` records device health (battery, RAM, storage) and coarse network data into `background_logs`. It also acts as a **watchdog**: if a session claims to be active but has not logged for 10 minutes (the OS killed it), it **restarts logging and continues the same session**; if Android won't allow that (no battery-optimisation exemption or no "Allow all the time" location), it posts a notification so the tester can restart by hand.
 
 On **STOP LOGGING**, what happens to the files depends on the mode (below). The app works on both **rooted and non-rooted** Android devices; root access is not required.
 
@@ -64,14 +64,21 @@ On **STOP LOGGING**, what happens to the files depends on the mode (below). The 
 
 | | Developer mode | Production mode |
 |---|---|---|
-| Where logs go | Stay on the phone | Uploaded to Firebase Storage on Stop |
-| File location | `Download/NetworkLogger/session_<start time>/network_logs_<start time>.csv` (+ `background_logs_…`) | `Download/network_logs.csv`, `Download/background_logs.csv` (deleted after a successful upload) |
+| Where logs go | Stay on the phone | Streamed to Cloud Firestore every 60 s during the session |
+| File location | `Download/NetworkLogger/session_<start time>/network_logs_<start time>.csv` (+ `background_logs_…`) | No CSV on the phone; Firestore queues unsent batches on disk while offline |
 | App colours | Amber / brown, "DEVELOPER MODE" banner | Original navy / indigo |
 | Default | **On** for a fresh install | — |
 
 - Switch with the button in the mode bar under the header. Switching is blocked while a session is running.
-- The mode is **captured when a session starts**; Stop acts on that mode, not on the toggle's current position. Developer sessions write straight into their own timestamped folder and never touch the production files, so dev data can never be uploaded later.
-- Uploads go to `logs/<firebase uid>/<ANDROID_ID>/<sessionId>/` with metadata (tester name, device model, manufacturer, Android version, app version). **`sessionId` is the upload time, i.e. the end of the session.**
+- The mode is **captured when a session starts**; Stop acts on that mode, not on the toggle's current position. Developer sessions write straight into their own timestamped folder and never go through `CloudSync`, so dev data can never be uploaded.
+- Production data goes to Firestore (`CloudSync.kt`):
+  - `users/<firebase uid>/sessions/<ANDROID_ID>_<start yyyyMMdd_HHmmss>` — tester name, device model, manufacturer, Android/app version, `startedAtMs`, `endedAtMs`, `status` (`active` / `ended` / `died`)
+  - `…/batches/<seq>` — one document per minute; `rows` holds that minute's 5 s samples, each with an epoch-ms `ts` and the `network_logs` columns as typed values
+  - `…/background/<auto id>` — one document per 15-minute `NetworkWorker` run
+  - On the session document, `restarts` counts automatic resumes and `events` records why logging stopped: Android's process-exit reason (e.g. `USER_REQUESTED: stop com.google.android.gms due to installPackageLI` when Google Play services updates), `service_destroyed`, `task_removed` (swiped away), `fgs_timeout`, and each `resumed` with its gap
+- Security rules are in [firestore.rules](firestore.rules): a phone may only create documents under its own anonymous uid and cannot read anything.
+- Throughput excludes the app's own traffic, so the uploads don't show up as measured DL/UL.
+- Sessions uploaded by older app versions (CSV files in Firebase Storage under `logs/…`) are unchanged and still read by `fetch_logs.py`.
 
 ---
 
@@ -89,7 +96,7 @@ The app has two product flavors (`app/build.gradle.kts`), sharing one package na
 ./gradlew :app:assemblePublicRelease     # app/build/outputs/apk/public/release/
 ```
 
-In Android Studio: **Build → Select Build Variant**. The public release is currently signed with the local debug key — fine for sharing with a few testers; switch to a dedicated release keystore before wide or Play Store distribution (users can't update across a signing-key change). Only one flavor can be installed on a phone at a time. Experiment scripts that tap Start/Stop by screen coordinates expect the **internal** build's layout.
+In Android Studio: **Build → Select Build Variant**. The public release is currently signed with the local debug key — fine for sharing with a few testers; switch to a dedicated release keystore before wide or Play Store distribution (users can't update across a signing-key change). Only one flavor can be installed on a phone at a time. Experiment scripts that tap Start/Stop by screen coordinates expect the **internal** build's layout. Start and Stop are the same full-width button, so a script must tap it once to start and once to stop, and can't recover by tapping "Stop" if the session is already stopped.
 
 ---
 
@@ -107,16 +114,20 @@ NetworkLogger/
 │       ├── main/
 │       │   ├── java/com/example/networklogger/
 │       │   │   ├── MainActivity.kt    ← UI, permissions, dev-mode toggle & colours, root detection
-│       │   │   ├── LoggingService.kt  ← Foreground service: 5 s sampling, upload on Stop
+│       │   │   ├── LoggingService.kt  ← Foreground service: 5 s sampling, 60 s cloud flush
 │       │   │   ├── NetworkWorker.kt   ← 15 min device-health logging + session watchdog
-│       │   │   ├── LogStorage.kt      ← Where each session's CSV rows go (dev folder vs Downloads)
+│       │   │   ├── LogStorage.kt      ← Session mode; developer-mode CSV files
+│       │   │   ├── CloudSync.kt       ← Production: buffers samples, writes Firestore batches, resumes sessions
+│       │   │   ├── SessionDiagnostics.kt ← Why logging stopped (Android exit reasons) → session events
 │       │   │   └── BandInfo.kt        ← Serving-cell band from getBands() or EARFCN/NR-ARFCN tables
 │       │   ├── res/layout/activity_main.xml
 │       │   └── AndroidManifest.xml
 │       └── test/.../BandInfoTest.kt   ← Unit tests for the channel → band lookup
 │
-├── grafana_pipeline/                  ← Firebase → InfluxDB → Grafana (see its README)
-└── presentation_charts/               ← Analysis scripts and charts (see its README)
+├── firestore.rules                    ← Firestore security rules (phones write only their own data)
+├── grafana_pipeline/                  ← Firestore/Storage → InfluxDB → Grafana on the Mac, incl. live listener (see its README)
+├── server/                            ← Same pipeline as an always-on service on the lab server (see its README)
+└── presentation_charts/               ← Analysis scripts and charts, incl. app robustness (see its README)
 ```
 
 ---
@@ -135,18 +146,18 @@ NetworkLogger/
                       cell, BandInfo, RSRP…
           └───────────────┼──────────────────────────┘
                           ▼
-              LogStorage.appendRow("network_logs")
-                          │
             dev session ──┴── production session
                  │                    │
-   Download/NetworkLogger/      Download/network_logs.csv
-     session_<start>/                 │ on Stop
-                                      ▼
-                           Firebase Storage (anonymous auth)
+   LogStorage.appendRow       CloudSync.addSample (memory)
+                 │                    │ every 60 s
+   Download/NetworkLogger/            ▼
+     session_<start>/        Cloud Firestore (anonymous auth,
+                              offline queue on the phone)
 
    While a session runs:  WorkManager (every 15 min) ──► NetworkWorker
-                          ├─ LogStorage.appendRow("background_logs")
-                          └─ watchdog: session silent > 10 min → notification
+                          ├─ background row → CSV (dev) / Firestore (production)
+                          └─ watchdog: session silent > 10 min → resume same session
+                                       (or notification if Android won't allow it)
 ```
 
 ---
@@ -175,7 +186,9 @@ NetworkLogger/
 ### Reliability Features
 
 - Foreground service keeps 5 s sampling alive when the app is backgrounded or the screen is off
-- Session watchdog notification if the OS kills logging
+- Partial wake lock while logging, so the 5 s timer keeps running when the idle phone sleeps (Doze)
+- Firestore keeps unsent batches on the phone while offline and uploads them when the connection returns
+- If Android kills logging (e.g. a Google Play services update), the session resumes by itself — after a restart by Android immediately, otherwise via the 15-minute watchdog — with the cause recorded on the session
 - Header check: if an old-format CSV is found (different columns), it is renamed `<name>_old-format_<time>.csv` instead of being appended to
 
 ### Security Features
@@ -217,9 +230,11 @@ Field tests (Oct 2026) on Samsung, Motorola, Nothing and moto phones returned th
 | `FusedLocationProviderClient.getCurrentLocation(PRIORITY_HIGH_ACCURACY)` | Fresh GPS fix each sample |
 | Foreground `Service` (`location` + `dataSync` types) | 5 s sampling loop that survives backgrounding |
 | `WorkManager` periodic (15 min) + one-time request | Background device-health logging and watchdog |
-| `TrafficStats.getTotalRx/TxBytes` | Throughput between samples |
+| `TrafficStats.getTotalRx/TxBytes` minus `getUidRx/TxBytes` | Throughput between samples, excluding the app's own uploads |
+| `PowerManager.PARTIAL_WAKE_LOCK` | Keeps the sampling timer running while the phone is idle |
+| `ActivityManager.getHistoricalProcessExitReasons` (API 30+) | Why the app's process ended, stored on the session |
 | `MediaStore.Downloads` with `RELATIVE_PATH` | Writes CSVs into Downloads or `Download/NetworkLogger/session_…/` |
-| Firebase Storage + Firebase Auth (anonymous) | Uploading production sessions with metadata |
+| Cloud Firestore + Firebase Auth (anonymous) | Streaming production sessions with metadata |
 
 ### SDK Configuration
 
@@ -236,7 +251,7 @@ implementation("androidx.work:work-runtime-ktx:2.9.0")
 implementation("androidx.cardview:cardview:1.0.0")
 implementation("com.google.android.material:material:1.11.0")
 implementation(platform("com.google.firebase:firebase-bom:33.13.0"))
-implementation("com.google.firebase:firebase-storage-ktx")
+implementation("com.google.firebase:firebase-firestore")
 implementation("com.google.firebase:firebase-auth-ktx")
 ```
 
@@ -276,7 +291,7 @@ Recorded every **5 seconds** while logging is active. Columns are appended at th
 ```
 `bandwidthMHz` is `N/A` here because this phone (Samsung, Android 12) doesn't report the LTE channel width.
 
-> **Timestamps:** rows only carry `HH:mm:ss`. The uploaded `sessionId` (`yyyyMMdd_HHmmss`) is stamped at **upload — the end of the session** — so reconstruct dates by anchoring the last row on that date and walking backwards.
+> **Timestamps:** CSV rows (developer mode, and production sessions from older app versions) only carry `HH:mm:ss`. For the old Storage uploads the `sessionId` (`yyyyMMdd_HHmmss`) was stamped at **upload — the end of the session** — so dates are reconstructed by anchoring the last row on that date and walking backwards. Firestore rows carry a full epoch-ms `ts` instead.
 
 ### background_logs
 
@@ -314,18 +329,18 @@ See [setupGUIDE.md](setupGUIDE.md) for a step-by-step walkthrough.
 ### First Launch Checklist
 
 1. Allow **Location** and **Phone** permissions (and **Notifications** on Android 13+)
-2. Allow the battery-optimisation exemption
-3. **Settings → Apps → NetworkLogger → Battery → No Restrictions**
-4. Enable **Autostart** for NetworkLogger (Realme / Xiaomi / OPPO / OnePlus)
-5. Enter a tester name and tap **Save** (goes into upload metadata)
-6. Internal build only: choose Developer or Production mode
+2. When asked again for location, choose **Allow all the time** — needed for the automatic resume after a kill
+3. Allow the battery-optimisation exemption
+4. **Settings → Apps → NetworkLogger → Battery → No Restrictions** (Samsung: also add it to *Never sleeping apps*)
+5. Enable **Autostart** for NetworkLogger (Realme / Xiaomi / OPPO / OnePlus)
+6. Enter a tester name and tap **Save** (goes into the session's cloud metadata)
+7. Internal build only: choose Developer or Production mode
 
 ### File Locations on Device
 
 ```
 Developer mode:  /storage/emulated/0/Download/NetworkLogger/session_<start time>/
-Production mode: /storage/emulated/0/Download/network_logs.csv
-                 /storage/emulated/0/Download/background_logs.csv   (until uploaded)
+Production mode: nothing — rows are streamed to Firestore
 ```
 
 ```bash
@@ -339,10 +354,12 @@ adb pull /storage/emulated/0/Download/NetworkLogger/ ./phone_logs/
 | Permission | Why it is needed |
 |------------|-----------------|
 | `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION` | Required by Android for `allCellInfo` and for GPS |
+| `ACCESS_BACKGROUND_LOCATION` | "Allow all the time": a logging service restarted from the background can only read GPS/cells with it (Android 11+) |
+| `WAKE_LOCK` | Keeps the CPU awake during a session so sampling doesn't stall in Doze |
 | `READ_PHONE_STATE` | Network type, `TelephonyDisplayInfo` (5G NSA), operator |
 | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_LOCATION`, `FOREGROUND_SERVICE_DATA_SYNC` | The logging service and background worker (mandatory types on Android 14+) |
 | `POST_NOTIFICATIONS` | Logging notification and watchdog alerts (Android 13+) |
-| `INTERNET` | Uploading production sessions to Firebase |
+| `INTERNET` | Streaming production sessions to Firestore |
 | `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | Asks to be exempt so logging isn't killed |
 
 > **Why does the app say "make and manage phone calls"?**  
@@ -389,10 +406,13 @@ Shown when phone-state permission is missing or the type isn't mapped. The cell 
 `allCellInfo` can be empty during the modem's refresh; the app recovers on the next 5 s cycle.
 
 ### Logging slows on aggressive OEM battery management
-Some OEMs throttle or kill background apps despite the foreground service. Enable **No Restrictions** and **Autostart**; the watchdog notifies if a session dies.
+Some OEMs throttle or kill background apps despite the foreground service (the Motorola g35 restarted logging hundreds of times in Oct 2026). Enable **No Restrictions** and **Autostart**; killed sessions now resume by themselves and record the cause.
+
+### Google Play services updates stop the app
+When Google Play services updates itself (usually while charging), Android stops every app using it, NetworkLogger included (exit reason `stop com.google.android.gms due to installPackageLI`). Android doesn't restart the service after this kind of stop; the watchdog resumes the session within 10–25 minutes, and that gap is lost.
 
 ### Force-stopping right after Stop
-If the app is killed before the upload finishes (e.g. by a script's `am force-stop`), the CSV isn't cleared and that run is uploaded again inside the next session. Allow ~20 s after Stop; the analysis loaders de-duplicate by device and timestamp.
+Production samples are held in memory for up to 60 s before being handed to Firestore, so if the app is force-stopped (e.g. by a script's `am force-stop`) the last partial minute is lost. Batches already handed over survive: Firestore keeps them on disk and sends them the next time the app runs. The very first sync on a phone needs a network connection for the anonymous sign-in; until it succeeds, samples wait in memory.
 
 ---
 
@@ -408,6 +428,10 @@ If the app is killed before the upload finishes (e.g. by a script's `am force-st
 | Serving cell sometimes wrong | `allCellInfo` order isn't guaranteed | Pick the cell with `isRegistered` |
 | LTE "Cell ID" was the full ECI | `CellIdentityLte.ci` = 256 × eNB + Cell ID | Decomposed per 3GPP |
 | Silent session death | OS killed the process without Stop | WorkManager watchdog + notification |
+| >1 min gaps overnight (25% of session time on the Samsung) | No wake lock: the timer stopped while the idle phone slept (Doze) | Partial wake lock while logging |
+| Sessions died when Google Play services updated | Android stops apps depending on Play services | Watchdog resumes the same session |
+| Hundreds of empty sessions (Motorola) | Each automatic restart started a new session, losing unsent samples | A restart continues the session in progress |
+| Causes of deaths unknown | Nothing recorded at the time | Exit reasons and service lifecycle events stored on the session |
 | Dev-mode data could reach Firebase | Mode was read at Stop, and dev rows shared the upload files | Mode captured at Start; dev sessions write to their own folder |
 | Band unknown for analysis | Only shown on screen | `BandInfo` + `arfcn/band/bandSource/bandwidthMHz/nrLegBand` columns |
 | App crash on rooted OnePlus (Android 14) | Missing `foregroundServiceType` | Declared service types in manifest + `ForegroundInfo` |
@@ -418,14 +442,16 @@ If the app is killed before the upload finishes (e.g. by a script's `am force-st
 
 ## Data Pipeline & Analysis
 
-- **[grafana_pipeline/](grafana_pipeline/README.md)** — `fetch_logs.py` downloads all sessions from Firebase Storage (service-account key), `pull_and_load_influx.py --mirror` loads them into InfluxDB with corrected timestamps, de-duplication and an `op` (Jio/Vi) tag, and the **NetworkLogger Map** Grafana dashboard shows RSRP and band on Geomap panels.
-- **[presentation_charts/](presentation_charts/README.md)** — scripts for route maps, campus RSRP/band maps, the controlled Jio-vs-Vi experiment, and cross-operator comparisons.
+- **[grafana_pipeline/](grafana_pipeline/README.md)** — on the Mac: `firestore_listener.py` streams new Firestore batches into InfluxDB as they arrive (**NetworkLogger Live** dashboard, ~1 min behind the phone); `fetch_logs.py` + `pull_and_load_influx.py --mirror` load the older Storage CSV sessions with corrected timestamps, de-duplication and an `op` (Jio/Vi) tag; the **NetworkLogger Map** dashboard shows RSRP and band on Geomap panels.
+- **[server/](server/README.md)** — the same pipeline as an always-on service on the lab server (no Docker or sudo; cron watchdog). Dashboards for anyone on the IITD network, view-only: http://tejas.cse.iitd.ac.in:3300/d/networklogger-live and `/d/networklogger-map`.
+- **[presentation_charts/](presentation_charts/README.md)** — scripts for route maps, campus RSRP/band maps, the controlled Jio-vs-Vi experiment, cross-operator comparisons, and **app robustness** (when and why logging stopped, sampling gaps, upload delay).
 
 ---
 
 ## Testing
 
-- **Unit tests:** `./gradlew :app:testDebugUnitTest` — channel → band lookup (`BandInfoTest`).
+- **Unit tests:** `./gradlew :app:testInternalDebugUnitTest` — channel → band lookup (`BandInfoTest`).
+- **Robustness:** `presentation_charts/robustness/` measures how reliably sessions log in the field (13–26 Oct 2026: uploads 90% within 10 s and no batch lost; gaps almost only with the screen off; Samsung deaths traced to Google Play services updates).
 - **Devices used for field data (2026):** OnePlus 11R CPH2487 ×2 (Android 14, rooted; Jio and Vi, controlled table experiment), Samsung SM-M325F (Android 12, Vi), Nothing A001 (Android 16, Vi), Motorola edge 50 neo (Android 16, Jio), moto g35 (Vi), Xiaomi, Infinix and Realme devices; ~60k GPS-tagged samples around IIT Delhi.
 - **Observed with band logging:** Jio on n78 (3.5 GHz) and n28 (700 MHz); Vi on B3, B8 and B41 — Vi's B41 reads ~14 dB weaker than B3 at the same spot.
 
@@ -433,7 +459,9 @@ If the app is killed before the upload finishes (e.g. by a script's `am force-st
 
 ## Future Scope
 
-Done since the first version: cloud upload (Firebase), coverage maps, multi-device aggregation, operator comparison, band logging.
+Done since the first version: live cloud streaming (Firestore), live and map dashboards (Grafana, also on the lab server), coverage maps, multi-device aggregation, operator comparison, band logging, automatic session resume with recorded causes.
+
+- **Faster recovery** — detect a killed session sooner than the 10–25 min watchdog and keep unsent samples on disk
 
 - **NR-leg signal for 5G NSA** (`nrLegRsrp` from `getSignalStrength().getCellSignalStrengths()`)
 - **Write `N/A` for invalid readings** (`Integer.MAX_VALUE`, −44/−3) at the source

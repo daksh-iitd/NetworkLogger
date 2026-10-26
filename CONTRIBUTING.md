@@ -59,4 +59,5 @@ Open an issue with:
 - Device model and Android version
 - Steps to reproduce
 - Expected vs actual behaviour
-- Logcat output filtered by `CSV`, `NetworkWorker`, or `CellInfo` tag
+- Logcat output filtered by `CSV`, `NetworkWorker`, `LoggingService`, `CloudSync` or `CellInfo` tag
+- For a session that stopped on its own: the session's `events` in Firestore, or `adb shell dumpsys activity exit-info com.example.networklogger`
