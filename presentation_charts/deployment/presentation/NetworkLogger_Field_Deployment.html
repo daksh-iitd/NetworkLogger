@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>NetworkLogger Field Deployment</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=Inter:wght@400;600&display=swap">
+<style>
+* { margin: 0; box-sizing: border-box; }
+@page { size: 1920px 1080px; margin: 0; }
+html, body { background: #555; }
+body > section { width: 1920px; height: 1080px; overflow: hidden; position: relative; margin: 0 auto 24px; page-break-after: always; break-after: page; }
+aside { display: none; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: .35em .6em; text-align: left; border-bottom: 2px solid #d9d7cf; vertical-align: top; }
+th { color: #14213d; }
+ul { padding-left: 1.2em; }
+.arr { font-size: 44px; color: #6b7180; }
+@media print { html, body { background: none; } body > section { margin: 0; } }
+:root {
+  --ink: #14213d;
+  --body: #4a5263;
+  --muted: #6b7180;
+  --paper: #fafaf7;
+  --paper2: #f0efe9;
+  --blue: #2a78d6;
+  --blue-dark: #104281;
+  --orange: #c4501d;
+  --line: #d9d7cf;
+  --night-text: #c9d6ea;
+}
+
+body { font-family: 'Inter', Arial, sans-serif; color: var(--body); }
+
+section { padding: 128px; background: var(--paper); display: flex; flex-direction: column; gap: 40px; }
+section.alt { background: var(--paper2); }
+section.night { background: var(--ink); }
+
+h1, h2, h3 { font-family: 'Space Grotesk', Arial, sans-serif; color: var(--ink); }
+h1 { font-size: 88px; font-weight: 700; line-height: 1.05; }
+h2 { font-size: 56px; font-weight: 600; line-height: 1.1; }
+h3 { font-size: 32px; font-weight: 600; line-height: 1.2; }
+p { font-size: 28px; line-height: 1.4; }
+
+.eyebrow { font-size: 24px; font-weight: 600; color: var(--blue); letter-spacing: 2px; }
+.night h1, .night h2, .night h3 { color: #f6f4ee; }
+.night p { color: var(--night-text); }
+.night .eyebrow { color: #86b6ef; }
+
+.lede { font-size: 32px; color: var(--body); }
+.small { font-size: 24px; color: var(--muted); }
+
+/* chart slides: heading row, then the picture fills the rest */
+section.chart { gap: 24px; padding: 96px 128px 80px; }
+.chart .head { display: flex; flex-direction: column; gap: 8px; }
+.chart .head p { font-size: 26px; color: var(--muted); }
+.chart img { width: 1664px; height: 700px; object-fit: contain; }
+.chart .pic-short { height: 640px; }
+
+/* tables */
+table { font-size: 26px; color: var(--body); }
+
+/* card rows */
+.row { display: flex; gap: 32px; }
+.card { flex: 1; background: #ffffff; border: 2px solid var(--line); border-radius: 16px; padding: 36px; display: flex; flex-direction: column; gap: 14px; }
+.alt .card { background: var(--paper); }
+.card p { font-size: 26px; }
+.card .big { font-family: 'Space Grotesk', Arial, sans-serif; font-size: 88px; font-weight: 700; color: var(--blue-dark); line-height: 1; }
+.card .big-o { font-family: 'Space Grotesk', Arial, sans-serif; font-size: 88px; font-weight: 700; color: var(--orange); line-height: 1; }
+.card .label { font-size: 24px; font-weight: 600; color: var(--muted); letter-spacing: 1px; }
+
+/* pipeline */
+.flow { display: flex; align-items: stretch; gap: 0; }
+.step { width: 270px; background: #ffffff; border: 2px solid var(--line); border-radius: 16px; padding: 28px 24px; display: flex; flex-direction: column; gap: 10px; }
+.step p { font-size: 24px; }
+.step h3 { font-size: 30px; }
+.step.hl { border-color: var(--blue); }
+.arrow { width: 74px; display: flex; align-items: center; justify-content: center; }
+.arrow x-shape { width: 46px; height: 26px; background: var(--muted); }
+
+.two { display: flex; gap: 64px; }
+.two > div { flex: 1; display: flex; flex-direction: column; gap: 20px; }
+
+ul.tight { font-size: 26px; line-height: 1.45; color: var(--body); }
+
+.pill { font-size: 24px; font-weight: 600; color: var(--ink); background: #ffe8b3; padding: 8px 18px; border-radius: 24px; }
+
+@keyframes rise { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+.card, .step { animation: rise 500ms ease-out both; animation-delay: calc(var(--i, 0) * 110ms); }
+
+.card, .step { animation: none !important; }
+</style></head>
+<body>
+<section id="cover" class="night" style="justify-content:space-between">
+<p class="eyebrow">M.TECH PROJECT · IIT DELHI · 17 NOV 2026</p>
+<div style="display:flex; flex-direction:column; gap:32px">
+<h1 style="width:1500px">NetworkLogger: two field deployments on volunteers’ phones</h1>
+<p style="font-size:36px; width:1400px">What the app collects, what broke in the first deployment, how the new app did on the same phones, and the dashboards built on the data</p>
+</div>
+<p class="small" style="color:#9fb3cf">Data: Firestore and InfluxDB, 26 Aug – 17 Nov 2026 · 1.02 million samples · 19 phones</p>
+<aside>Two deployments. The first, 13 to 25 October, ran the first Firestore version of the app. The second used a rebuilt app, installed on the same phones from 26 October and still running. All numbers come from the project’s own data in Firestore and InfluxDB, pulled on 17 November.</aside>
+</section>
+
+<section id="collects" style="gap:36px">
+<div style="display:flex; flex-direction:column; gap:12px">
+<p class="eyebrow">WHAT THE APP COLLECTS</p>
+<h2>Every 5 seconds the phone records its cell, its signal and where it is</h2>
+</div>
+<table style="font-size:25px">
+<tr><th style="width:27%">What</th><th style="width:13%">How often</th><th style="width:60%">Why we need it</th></tr>
+<tr><td>Signal: RSRP, RSRQ, SINR</td><td>5 s</td><td>Coverage quality: the value on every map and grid</td></tr>
+<tr><td>Serving cell: operator, cell ID, PCI, TAC</td><td>5 s</td><td>Which tower serves which spot, and when the phone switches</td></tr>
+<tr><td>Radio: 4G or 5G, band, ARFCN</td><td>5 s</td><td>Which frequency covers which area; when 5G falls back to 4G</td></tr>
+<tr><td>GPS latitude and longitude</td><td>5 s</td><td>Puts each sample in a grid cell on the campus map</td></tr>
+<tr><td>Phone’s traffic, kbps (app’s own excluded)</td><td>5 s</td><td>Shows whether the phone was in use; not a speed test</td></tr>
+<tr><td>Screen on or off</td><td>5 s</td><td>Explains gaps: Android slows apps when the screen is off</td></tr>
+<tr><td>Battery, memory, storage</td><td>15 min</td><td>Spots phones that are likely to stop the app</td></tr>
+<tr><td>Phone model, Android version, restart events</td><td>per session</td><td>Compare phones; find out why logging stopped</td></tr>
+</table>
+<aside>The app is passive: it never runs a speed test or sends test traffic. Signal, cell and radio fields come from Android’s telephony APIs; location from the GPS. The traffic figure is the phone’s total bytes in and out, minus the app’s own uploads, so it only says how busy the phone was. Device health is a separate background job every 15 minutes.</aside>
+</section>
+
+<section id="old-architecture" style="justify-content:space-between">
+<div style="display:flex; flex-direction:column; gap:12px">
+<p class="eyebrow">THE FIRST VERSION · AUG – OCT</p>
+<h2>The first app wrote a CSV file and uploaded it only when the tester pressed Stop</h2>
+</div>
+<div class="flow">
+<div class="step" style="--i:0"><h3>Phone</h3><p>Writes each sample to a CSV file for the session, on the phone.</p></div>
+<div class="arrow"><span class="arr">→</span></div>
+<div class="step" style="--i:1"><h3>Storage</h3><p>On Stop, the whole file is uploaded to Firebase Storage.</p></div>
+<div class="arrow"><span class="arr">→</span></div>
+<div class="step" style="--i:2"><h3>Download</h3><p>A script, run by hand, copies new files to a local folder.</p></div>
+<div class="arrow"><span class="arr">→</span></div>
+<div class="step" style="--i:3"><h3>InfluxDB</h3><p>A second script loads the CSV rows.</p></div>
+<div class="arrow"><span class="arr">→</span></div>
+<div class="step" style="--i:4"><h3>Grafana</h3><p>Map dashboard, updated only after the files were loaded.</p></div>
+</div>
+<div class="row">
+<div class="card" style="--i:5"><p class="label">NOTHING LIVE</p><p>Data arrived only after Stop, often hours or days after it was taken.</p></div>
+<div class="card" style="--i:6"><p class="label">TIMES WITHOUT DATES</p><p>Rows held only HH:mm:ss; the date had to come from the upload time.</p></div>
+<div class="card" style="--i:7"><p class="label">MANUAL STEPS</p><p>Someone had to run the download and load scripts each time.</p></div>
+</div>
+<aside>These old files are still loaded into InfluxDB as history. Developer mode in the current app still writes CSV files, but keeps them on the phone and never uploads them.</aside>
+</section>
+
+<section id="pipeline" class="alt" style="gap:160px">
+<div style="display:flex; flex-direction:column; gap:12px">
+<p class="eyebrow">THE CURRENT VERSION · SINCE 13 OCT</p>
+<h2>Samples reach the dashboards about a minute after they are taken</h2>
+</div>
+<div class="flow">
+<div class="step hl" style="--i:0"><h3>Phone</h3><p>Takes a sample every 5 s and uploads a batch every 60 s. Batches wait in a queue while offline.</p></div>
+<div class="arrow"><span class="arr">→</span></div>
+<div class="step" style="--i:1"><h3>Firestore</h3><p>Google’s cloud database. Each phone signs in anonymously and can only write its own data.</p></div>
+<div class="arrow"><span class="arr">→</span></div>
+<div class="step" style="--i:2"><h3>Listener</h3><p>A Python script that receives each new batch within seconds and passes it on.</p></div>
+<div class="arrow"><span class="arr">→</span></div>
+<div class="step" style="--i:3"><h3>InfluxDB</h3><p>Time-series store, kept 180 days. Coverage grid rebuilt every 30 min.</p></div>
+<div class="arrow"><span class="arr">→</span></div>
+<div class="step hl" style="--i:4"><h3>Grafana</h3><p>Live and Map dashboards, view-only, on the IITD network.</p></div>
+</div>
+<aside>Phones never read from the cloud. Only the listener, which holds a service-account key, reads the data. Developer mode keeps CSV files on the phone instead of uploading. The earlier app version uploaded a CSV per session on Stop; those files are still loaded as history.</aside>
+</section>
+
+<section id="p1-setup" style="justify-content:space-between">
+<div style="display:flex; flex-direction:column; gap:12px">
+<p class="eyebrow">PRELIMINARY DEPLOYMENT · 13–25 OCT</p>
+<h2>Three phones, all on Vi, ran the first live-upload app for 13 days</h2>
+</div>
+<div class="row">
+<div class="card" style="--i:0"><p class="label">SAMSUNG GALAXY M32 · ANDROID 12</p><p class="big">108 h</p><p>logged in 7 sessions over 11 days. Meant to run around the clock.</p></div>
+<div class="card" style="--i:1"><p class="label">MOTOROLA G35 5G · ANDROID 15</p><p class="big-o">2 h</p><p>logged, spread over 464 sessions: Android kept killing and restarting the app.</p></div>
+<div class="card" style="--i:2"><p class="label">NOTHING A001 · ANDROID 16</p><p class="big">1 session</p><p>A short test run on 17 Oct.</p></div>
+</div>
+<p class="small">Hours = 5 s samples received × 5 s. Before this, an older CSV version of the app ran from late August on other phones too (OnePlus 11R ×2, Xiaomi, Motorola edge 50 neo, Infinix); that data is kept as history.</p>
+<aside>This was the first version that streamed to Firestore every minute, installed from 13 October. The Samsung was my own phone and was meant to log continuously. The Motorola belongs to a volunteer. Its 464 sessions are almost all Android restarting the service: 373 of them have no data at all.</aside>
+</section>
+
+<section id="p1-where" class="chart">
+<div class="head">
+<p class="eyebrow">GPS LOCATIONS</p>
+<h2>Samples cover most of the campus, in both deployments</h2>
+</div>
+<img src="../charts/03_where_samples.png" alt="Two maps of IIT Delhi. Left: 75,144 samples from 3 phones in the preliminary deployment. Right: 505,594 samples from 9 phones with the new app, spread over more of the campus.">
+<aside>Each dot is one 5-second sample with a GPS fix, inside the campus plus about 150 metres. The new app covers more of the campus because more phones took part. Samples outside this box, mostly at testers’ homes, are left out on purpose.</aside>
+</section>
+
+<section id="p1-timeline" class="chart">
+<div class="head">
+<p class="eyebrow">PRELIMINARY DEPLOYMENT · SESSIONS</p>
+<h2>The Samsung ran for days at a time; the Motorola kept restarting</h2>
+</div>
+<img src="../../robustness/charts/01_session_timeline.png" alt="Timeline 13 to 26 October. The Samsung M32 logs in long blocks with three unexpected stops; the Motorola g35 logs in many short bursts; the Nothing A001 has one short session.">
+<aside>Bars are stretches with no gap longer than a minute. Red crosses are sessions that stopped on their own. For the Samsung, the phone’s exit history showed two of the three were Google Play services updating itself, which kills other apps; the third has no recorded cause.</aside>
+</section>
+
+<section id="p1-doze" class="chart">
+<div class="head">
+<p class="eyebrow">PRELIMINARY DEPLOYMENT · PROBLEM 1 OF 3</p>
+<h2>Samsung: most logging time was lost overnight, with the screen off</h2>
+</div>
+<img style="height:600px" src="../../robustness/charts/05_gaps_by_hour.png" alt="Bar chart of time lost to gaps by hour of day on the Samsung M32. Between 00:00 and 08:00, 36–64% of each hour was lost; during the day 2–22%.">
+<p class="small" style="margin-top:-8px">1,593 of the 1,596 gaps longer than a minute began with the screen off. Uploads were not the problem: 90% of batches reached Firestore within 10 s and none were lost.</p>
+<aside>Overnight the phone lies still with the screen off, which is when Android’s Doze mode is deepest. Doze delays app timers, and the app held no wake lock, so the 5-second timer stopped firing for minutes at a time. Fix in the new app: a partial wake lock.</aside>
+</section>
+
+<section id="p1-samsung-stops" class="chart alt">
+<div class="head">
+<p class="eyebrow">PRELIMINARY DEPLOYMENT · PROBLEM 2 OF 3</p>
+<h2>Samsung: Google Play services updates killed the app, and nothing restarted it</h2>
+</div>
+<img src="../../robustness/charts/08_samsung_shutdowns.png" alt="Timeline of the Samsung M32’s seven sessions, 13–26 Oct. Four were stopped by the user; two were killed when Google Play services updated itself, one stopped for an unknown reason.">
+<aside>The causes come from the phone’s own process-exit history, read over adb on 26 October. After the 22 October kill the phone did not log for 32 hours, because nothing restarted the app. Fix in the new app: a watchdog that checks every 15 minutes and resumes the same session, and session events that record these causes automatically.</aside>
+</section>
+
+<section id="p1-moto" class="chart">
+<div class="head">
+<p class="eyebrow">PRELIMINARY DEPLOYMENT · PROBLEM 3 OF 3</p>
+<h2>Motorola g35: too little free memory, so Android keeps killing the app</h2>
+</div>
+<img src="../charts/07_moto_memory.png" alt="Left: free memory per phone; the Motorola g35 has the least, 1.1 of 3.3 GB. Right: after each restart, 52% of kills came within 10 seconds and 18% within a minute.">
+<aside>The Motorola has 3.3 GB of memory visible to Android and on average only 1.1 GB free, the least of all phones. Android’s low-memory killer ends the app’s process (reason recorded as “Watermark Pressure”); Android restarts it, and it is often killed again within seconds, mostly while still starting up, before it runs as a protected foreground service. In the first deployment every restart opened a new, empty session: 464 sessions, 373 with no data. The new app resumes the same session, but the kills still cost about 70% of each day. The cause is the phone’s memory, which the app alone can’t fix.</aside>
+</section>
+
+<section id="changes" style="gap:36px">
+<div style="display:flex; flex-direction:column; gap:12px">
+<p class="eyebrow">APP CHANGES · INSTALLED 26 OCT</p>
+<h2>Each change answers a problem seen in the first deployment</h2>
+</div>
+<table style="font-size:26px">
+<tr><th style="width:44%">Problem seen</th><th style="width:56%">Change in the new app</th></tr>
+<tr><td>Gaps whenever the screen was off (Doze)</td><td>A partial wake lock keeps the 5 s timer running</td></tr>
+<tr><td>A killed app came back as a new, empty session</td><td>Resumes the same session, restarted by Android or by a watchdog that checks every 15 min</td></tr>
+<tr><td>No record of why logging stopped</td><td>Each session stores events: Android’s exit reason, restarts, gaps and timeouts</td></tr>
+<tr><td>Throughput counted the app’s own uploads</td><td>The app’s own traffic is subtracted</td></tr></table>
+<div style="display:flex; gap:16px; align-items:center">
+<p class="pill">Testers must also set</p>
+<p style="font-size:26px">“Allow all the time” for location, and no battery optimisation for the app</p>
+</div>
+<aside>Without those two settings Android may refuse to restart the app in the background, so the resume logic cannot help. One Xiaomi phone in the second deployment shows exactly this: the app was killed and could not resume because background location was not allowed.</aside>
+</section>
+
+<section id="p2-setup" class="alt" style="gap:28px">
+<div style="display:flex; flex-direction:column; gap:12px">
+<p class="eyebrow">NEW APP · 26 OCT – 17 NOV</p>
+<h2>The same three phones, plus nine new volunteers</h2>
+</div>
+<table style="font-size:24px">
+<tr><th style="width:34%">Phone</th><th style="width:15%">Android</th><th style="width:17%">Operator</th><th style="width:17%">Days logged</th><th style="width:17%">Hours logged</th></tr>
+<tr><td>Samsung Galaxy M32</td><td>12</td><td>Vi</td><td>22</td><td>505</td></tr>
+<tr><td>Motorola e13</td><td>13</td><td>Vi</td><td>23</td><td>493</td></tr>
+<tr><td>Motorola g35 5G</td><td>15</td><td>Vi</td><td>20</td><td>149</td></tr>
+<tr><td>Samsung Galaxy S24 FE</td><td>16</td><td>Airtel</td><td>4</td><td>26</td></tr>
+<tr><td>Realme RMX3842</td><td>16</td><td>Airtel</td><td>3</td><td>15</td></tr>
+<tr><td>Samsung Galaxy S24</td><td>16</td><td>Airtel</td><td>3</td><td>14</td></tr>
+<tr><td>Nothing A001</td><td>16</td><td>Vi</td><td>5</td><td>13</td></tr>
+<tr><td>Samsung Galaxy A34</td><td>16</td><td>Airtel</td><td>2</td><td>13</td></tr>
+<tr><td>Samsung Galaxy S22 Ultra</td><td>16</td><td>Jio</td><td>2</td><td>11</td></tr>
+<tr><td>OnePlus CPH2423</td><td>15</td><td>Airtel</td><td>2</td><td>6</td></tr>
+<tr><td>Xiaomi 2201117PI</td><td>13</td><td>Jio</td><td>1</td><td>5</td></tr>
+</table>
+<p class="small">Days with at least 100 samples. Hours = samples × 5 s. A twelfth phone (vivo V2518) sent only 7 samples.</p>
+<aside>Most new volunteers installed the app on 26 October and logged for one to four days. Only three phones logged for three weeks. The short runs are not only volunteers stopping: on the Android 16 Samsungs and the Realme the app was stopped by Android after about six hours, which comes up two slides on.</aside>
+</section>
+
+<section id="p2-coverage" class="chart">
+<div class="head">
+<p class="eyebrow">NEW APP · DAY BY DAY</p>
+<h2>Two phones now log almost every 5 s, day after day</h2>
+</div>
+<img src="../charts/01_daily_coverage.png" alt="Heatmap of the share of each day logged per phone, 13 Oct to 16 Nov. After 26 Oct the Samsung M32 logs 98–99% every day and the Motorola e13 mostly 100%; the Motorola g35 varies from 0 to 69%; the other phones log for one to four days.">
+<aside>100 means a sample every 5 seconds for the whole day, 17,280 samples. The black line is the install day. The Samsung M32 logged one single session from 26 October to 16 November. The Motorola e13 is a new phone that stayed at one place for three weeks. The Motorola g35 still loses most of each day, explained on the next slides.</aside>
+</section>
+
+<section id="p2-before-after" style="gap:36px">
+<div style="display:flex; flex-direction:column; gap:12px">
+<p class="eyebrow">SAME PHONES, BEFORE AND AFTER</p>
+<h2>Samsung: from 44% to 99% of each day logged</h2>
+</div>
+<div style="display:flex; gap:48px; align-items:center">
+<img src="../charts/02_before_after.png" alt="Bar chart. Samsung Galaxy M32: 44% of the day logged with the preliminary app, 99% with the new app. Motorola g35: 1% before, 29% after." style="width:1060px; height:400px; object-fit:contain">
+<div style="flex:1; display:flex; flex-direction:column; gap:28px">
+<div class="card" style="--i:0"><p class="label">SAMSUNG GALAXY M32</p><p>One session for 21 days (26 Oct – 16 Nov). Restarted by the watchdog 5 times; 1.8 h lost in 511 h.</p></div>
+<div class="card" style="--i:1"><p class="label">MOTOROLA G35 5G</p><p>Killed by Android about 3,300 times. Each time it resumed, typically within 10 s, but long gaps remain.</p></div>
+</div>
+</div>
+<p class="small">Average of daily shares; preliminary 16–25 Oct, new app 27 Oct – 15 Nov. The Nothing A001 is left out: its tester ran short daytime sessions in both phases.</p>
+<aside>The Samsung’s five restarts followed Google Play services updates (three) and Android clearing the app’s process. Each time the watchdog brought it back in about 20 minutes. The Motorola is a different story: it is killed for memory, not for battery, so the wake lock does not help. It resumes automatically, but the time between kill and resume adds up to about 245 hours over three weeks.</aside>
+</section>
+
+<section id="p2-stops" class="alt" style="gap:32px">
+<div style="display:flex; flex-direction:column; gap:12px">
+<p class="eyebrow">WHAT STILL STOPS LOGGING</p>
+<h2>The session events now name the cause of each stop</h2>
+</div>
+<table style="font-size:24px">
+<tr><th style="width:24%">Phones</th><th style="width:40%">What happened</th><th style="width:36%">Next fix</th></tr>
+<tr><td>Samsung S22 Ultra, S24, S24 FE, A34; Realme (Android 16)</td><td>Android ended the service after 6 hours, the app crashed and could not resume. 15 sessions.</td><td>Drop the “data sync” service type, which Android 15+ limits to 6 h a day; keep “location”</td></tr>
+<tr><td>Motorola g35 (Android 15)</td><td>Killed for low memory about 3,300 times; resumed each time</td><td>Lighter service; ask the tester to close heavy apps; a phone with more memory</td></tr>
+<tr><td>Samsung M32, Motorola e13</td><td>Google Play services updates kill the app; the watchdog brings it back after 20 min to 10 h</td><td>A faster watchdog than every 15 min</td></tr>
+<tr><td>Xiaomi</td><td>Phone’s cleaner app killed it; no background location, so no resume</td><td>Setup checklist at install</td></tr>
+<tr><td>Nothing A001</td><td>Short daytime sessions, each ended after the app was swiped away</td><td>Explain to the tester that it should keep running</td></tr>
+</table>
+<aside>The six-hour stop is new information that only the session events could give us. The service is declared as both location and data sync. Since Android 15, data-sync services may run only six hours a day; Android then calls onTimeout, and if the service doesn’t stop in time, the app crashes. Most of these sessions lasted exactly 6.0 hours; the limit counts across a day, so later sessions ended sooner. Location services have no such limit, so declaring only location should fix it. This change is not made yet.</aside>
+</section>
+
+<section id="dash-views" class="night" style="justify-content:space-between">
+<div style="display:flex; flex-direction:column; gap:12px">
+<p class="eyebrow">DASHBOARDS</p>
+<h2 style="width:1500px">One dataset, three ways to look at it</h2>
+</div>
+<div class="row">
+<div class="card" style="--i:0; background:#1e2d4f; border-color:#34466e"><p class="label" style="color:#86b6ef">SPATIAL</p><h3 style="color:#f6f4ee">Campus grid</h3><p style="color:#c9d6ea">Campus split into squares of 27–220 m. Each square shows the median signal per operator: Jio, Vi and Airtel side by side.</p></div>
+<div class="card" style="--i:1; background:#1e2d4f; border-color:#34466e"><p class="label" style="color:#86b6ef">TEMPORAL</p><h3 style="color:#f6f4ee">One place over time</h3><p style="color:#c9d6ea">For a phone that stays put, signal by hour and day, filtered by phone.</p></div>
+<div class="card" style="--i:2; background:#1e2d4f; border-color:#34466e"><p class="label" style="color:#86b6ef">HISTORICAL</p><h3 style="color:#f6f4ee">Everything since August</h3><p style="color:#c9d6ea">Every sample from both app versions, on a map with any time range.</p></div>
+</div>
+<p class="small" style="color:#9fb3cf">tejas.cse.iitd.ac.in:3300 · /d/networklogger-live and /d/networklogger-map · IITD network only, view-only</p>
+<aside>The Live dashboard holds the grid maps for the three operators and the recent time series; the Map dashboard is the full history. The next three slides show each view, drawn from the same data the dashboards use.</aside>
+</section>
+
+<section id="dash-spatial" style="flex-direction:row; gap:56px; padding:96px 128px 80px">
+<img src="../../operator_agreement/operator_heatmap_110m.png" alt="Map of IIT Delhi in 110 m squares. Each square is split into three stripes, Jio, Vi and Airtel, coloured from red (weak) to blue (strong); blank stripes mean too little data." style="width:1100px; height:904px; object-fit:contain">
+<div style="flex:1; display:flex; flex-direction:column; gap:28px; justify-content:center">
+<p class="eyebrow">SPATIAL · CAMPUS GRID</p>
+<h2 style="font-size:48px">All three operators in one square</h2>
+<p style="font-size:26px">Each 110 m square is split Jio | Vi | Airtel and coloured by median signal.</p>
+<p style="font-size:26px">In the 29 squares all three cover, Vi is strongest in 17, Airtel in 10, Jio in 2.</p>
+<p class="small">Jio is mostly 5G, whose signal reads a few dB lower by definition. Phones and times differ per operator.</p>
+</div>
+<aside>A blank stripe means fewer than three 30-second windows for that operator, not missing coverage: it shows where volunteers went. Vi has far more squares because most long-running phones are on Vi. In many shared squares the leader is ahead by only a few dB, so treat close calls as ties.</aside>
+</section>
+
+<section id="dash-hostel" style="flex-direction:row; gap:64px; padding:96px 128px 80px">
+<img src="../charts/06_hostel_map.png" alt="Satellite map of Aravali Hostel with a box around the building. Yellow dots inside the box are the samples used; white dots outside are not used." style="width:1000px; height:904px; object-fit:contain">
+<div style="flex:1; display:flex; flex-direction:column; gap:28px; justify-content:center">
+<p class="eyebrow">TEMPORAL · WHERE THE DATA COMES FROM</p>
+<h2 style="font-size:48px">Only samples taken inside Aravali Hostel</h2>
+<p style="font-size:26px">The Samsung M32 spent most of these three weeks in Aravali Hostel. The box is drawn around the hostel building.</p>
+<p style="font-size:26px">245,484 of its 341,273 GPS fixes from 27 Oct to 15 Nov fall inside. The rest, around campus, are left out.</p>
+<p class="small">Box ≈ 100 m × 85 m, traced on satellite imagery.</p>
+</div>
+<aside>Restricting to one building means any change over time is the network or the indoor spot, not the phone moving across campus.</aside>
+</section>
+
+<section id="dash-temporal" class="chart">
+<div class="head">
+<p class="eyebrow">TEMPORAL · ARAVALI HOSTEL</p>
+<h2>The typical signal stays near −90 dBm; some nights it drops below −105</h2>
+</div>
+<img src="../charts/04_fixed_spot_hours.png" alt="Heatmap of median RSRP by date and hour for the Samsung M32 inside Aravali Hostel, 27 Oct to 15 Nov, with an hourly profile. The hourly median stays between about −88 and −92 dBm; several nights in 8–15 Nov fall below −105 dBm.">
+<aside>This uses only samples whose GPS fix falls inside Aravali Hostel, so movement around campus is not the explanation. The hourly median barely moves, slightly lower in the afternoon. The red blocks are whole nights in the second week of November, from about midnight to 7 am. A phone that sits still for weeks makes this kind of pattern visible; blank cells are hours the phone was elsewhere. The cause of the night drops is not known yet.</aside>
+</section>
+
+<section id="dash-history" class="chart alt">
+<div class="head">
+<p class="eyebrow">HISTORICAL · SAME PLACE, MONTHS APART</p>
+<h2>History lets us compare one place over months: Vi at Aravali Hostel since August</h2>
+</div>
+<img src="../charts/08_hostel_weeks.png" alt="Weekly median Vi RSRP at Aravali Hostel from late August to mid November, between −88 and −94 dBm, with sample counts per week.">
+<aside>The Map dashboard keeps every sample since August, from both app versions. Here that history is used to follow one place: Vi at Aravali Hostel. The weekly median stays between −88 and −94 dBm for three months. Weeks with a long bar had bad nights, such as 9–15 November. Earlier weeks have far fewer samples because the old app only logged when started by hand.</aside>
+</section>
+
+<section id="privacy" style="gap:40px">
+<div style="display:flex; flex-direction:column; gap:12px">
+<p class="eyebrow">VOLUNTEER CONCERNS · PRIVACY</p>
+<h2>The real privacy risk is the GPS track, not the network data</h2>
+</div>
+<div class="two">
+<div>
+<h3>Collected</h3>
+<ul class="tight">
+<li>Exact location every 5 s, while logging</li>
+<li>Phone model and an app-specific phone ID</li>
+<li>Name typed in the app (optional)</li>
+<li>Cell, signal, screen on/off, bytes in and out</li>
+</ul>
+<h3>Never collected</h3>
+<ul class="tight">
+<li>Phone number, IMEI, contacts, calls, SMS</li>
+<li>Which apps or websites are used; traffic content</li>
+</ul>
+</div>
+<div>
+<h3>Why it matters</h3>
+<p style="font-size:26px">Three weeks of 5 s fixes reveal where someone sleeps and their daily routine. One phone in this study spent 99% of three weeks at one off-campus address.</p>
+<h3>Proposed safeguards</h3>
+<ul class="tight">
+<li>Written consent that names the GPS track</li>
+<li>Codes instead of names on dashboards</li>
+<li>Shared maps show only grid squares, campus only</li>
+<li>Delete a volunteer’s data on request</li>
+<li>Expiry date for raw tracks in Firestore</li>
+</ul>
+</div>
+</div>
+<aside>Already in place: phones sign in anonymously and can only write their own data, never read anyone’s; dashboards are view-only on the IITD network; the slides show campus samples only. Not yet: the lab server still uses the full admin key instead of a read-only one, names appear in the data, and Firestore has no expiry.</aside>
+</section>
+
+<section id="data-cost" class="alt" style="justify-content:space-between">
+<div style="display:flex; flex-direction:column; gap:12px">
+<p class="eyebrow">VOLUNTEER CONCERNS · DATA COST</p>
+<h2>About 5 MB of mobile data a day per phone: small, but not zero</h2>
+</div>
+<div class="row">
+<div class="card" style="--i:0"><p class="big">3.7 KB</p><p>per minute: one batch of 12 samples, measured from recent batches</p></div>
+<div class="card" style="--i:1"><p class="big">≈ 5 MB</p><p>per day, or about 160 MB a month, before network overhead</p></div>
+<div class="card" style="--i:2"><p class="big">&lt; 0.5%</p><p>of a 1.5 GB-a-day plan; nothing at all while on Wi-Fi</p></div>
+</div>
+<div style="display:flex; flex-direction:column; gap:16px">
+<h3>Ways to cover it for staff and volunteers</h3>
+<div class="row" style="gap:24px">
+<p class="pill" style="font-weight:400">Data top-up: [₹__ a month]</p>
+<p class="pill" style="font-weight:400">One-off payment: [₹__]</p>
+<p class="pill" style="font-weight:400">Wi-Fi-only upload (app change)</p>
+</div>
+</div>
+<aside>The 3.7 KB is the size of the stored batch document; TLS and protocol overhead add some more, so the next step is to read the real figure from Android’s data-usage screen on one phone. Battery use is the other likely concern and has not been measured yet. A Wi-Fi-only mode would need the app to keep unsent samples on disk, which is an open item. Amounts for payment are left blank for us to decide.</aside>
+</section>
+
+<section id="next" class="night" style="justify-content:space-between">
+<div style="display:flex; flex-direction:column; gap:12px">
+<p class="eyebrow">NEXT STEPS</p>
+<h2>Before the next round of volunteers</h2>
+</div>
+<div class="two">
+<div>
+<h3>App</h3>
+<ul class="tight" style="color:#c9d6ea">
+<li>Remove the 6-hour stop on Android 15+</li>
+<li>Count only mobile data and record Wi-Fi or cellular</li>
+<li>Measure real data and battery use per phone</li>
+<li>Setup checklist: location “all the time”, no battery optimisation</li>
+</ul>
+</div>
+<div>
+<h3>Pipeline and study</h3>
+<ul class="tight" style="color:#c9d6ea">
+<li>Get the lab-server listener past the campus proxy again</li>
+<li>Restart the listener without re-reading all of Firestore</li>
+<li>Consent form, coded names, data expiry</li>
+<li>More Jio and Airtel phones for two weeks or more</li>
+</ul>
+</div>
+</div>
+<p class="small" style="color:#9fb3cf">Data and charts: presentation_charts/deployment, robustness and operator_agreement in the project repository</p>
+<aside>The 6-hour fix matters most: it is why most new Android 16 phones logged only a day or two. More Jio and Airtel phones are needed because the grid comparison is currently dominated by Vi.</aside>
+</section>
+
+</body></html>

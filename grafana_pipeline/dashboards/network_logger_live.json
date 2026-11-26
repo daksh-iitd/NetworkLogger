@@ -15,6 +15,81 @@
   "templating": {
     "list": [
       {
+        "name": "gridSize",
+        "label": "Grid size",
+        "type": "custom",
+        "multi": false,
+        "includeAll": false,
+        "query": "27 m : 0.00025, 55 m : 0.0005, 110 m : 0.001, 220 m : 0.002",
+        "options": [
+          {
+            "text": "27 m",
+            "value": "0.00025",
+            "selected": false
+          },
+          {
+            "text": "55 m",
+            "value": "0.0005",
+            "selected": true
+          },
+          {
+            "text": "110 m",
+            "value": "0.001",
+            "selected": false
+          },
+          {
+            "text": "220 m",
+            "value": "0.002",
+            "selected": false
+          }
+        ],
+        "current": {
+          "selected": true,
+          "text": "55 m",
+          "value": "0.0005"
+        }
+      },
+      {
+        "name": "minSamples",
+        "label": "Min windows/cell",
+        "type": "custom",
+        "multi": false,
+        "includeAll": false,
+        "query": "1 : 1, 3 : 3, 5 : 5, 10 : 10, 20 : 20",
+        "options": [
+          {
+            "text": "1",
+            "value": "1",
+            "selected": false
+          },
+          {
+            "text": "3",
+            "value": "3",
+            "selected": true
+          },
+          {
+            "text": "5",
+            "value": "5",
+            "selected": false
+          },
+          {
+            "text": "10",
+            "value": "10",
+            "selected": false
+          },
+          {
+            "text": "20",
+            "value": "20",
+            "selected": false
+          }
+        ],
+        "current": {
+          "selected": true,
+          "text": "3",
+          "value": "3"
+        }
+      },
+      {
         "name": "deviceId",
         "label": "Device",
         "type": "query",
@@ -81,20 +156,12 @@
                 "value": null
               },
               {
-                "color": "#fc8d59",
-                "value": -110
-              },
-              {
                 "color": "#fee08b",
                 "value": -100
               },
               {
-                "color": "#91bfdb",
-                "value": -90
-              },
-              {
                 "color": "#2c7bb6",
-                "value": -80
+                "value": -90
               }
             ]
           },
@@ -116,10 +183,10 @@
       }
     },
     {
-      "id": 1,
+      "id": 10,
       "type": "geomap",
-      "title": "Where the phones are now \u2014 RSRP",
-      "description": "Every sample in the time range, coloured by RSRP. Phones send a batch every minute, so the newest points are up to ~1 minute old.",
+      "title": "Jio \u2014 regions + live phones",
+      "description": "Squares: $gridSize cells coloured by the median RSRP of all Jio data so far (precomputed every 30 min; hover for median, quality class and 30 s-window count; cells with fewer than $minSamples windows are hidden). Dots: live samples from the dashboard time range, up to ~1 min behind the phone.",
       "datasource": {
         "type": "influxdb",
         "uid": "P7C70A67DE99A08E6"
@@ -127,8 +194,8 @@
       "gridPos": {
         "x": 0,
         "y": 4,
-        "w": 14,
-        "h": 18
+        "w": 8,
+        "h": 14
       },
       "targets": [
         {
@@ -137,7 +204,15 @@
             "type": "influxdb",
             "uid": "P7C70A67DE99A08E6"
           },
-          "query": "from(bucket: \"network_logs_v2\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_log\")\n  |> filter(fn: (r) => true)\n  |> filter(fn: (r) => r.deviceId =~ /^${deviceId:regex}$/)\n  |> filter(fn: (r) => r._field == \"lat\" or r._field == \"lon\" or r._field == \"rsrp\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.lat and exists r.lon and exists r.rsrp)\n  |> group()\n  |> keep(columns: [\"_time\", \"lat\", \"lon\", \"rsrp\", \"band\", \"op\", \"deviceModel\", \"testerName\"])"
+          "query": "from(bucket: \"network_logs_v2\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_log\")\n  |> filter(fn: (r) => r.op == \"Jio\")\n  |> filter(fn: (r) => r.deviceId =~ /^${deviceId:regex}$/)\n  |> filter(fn: (r) => r._field == \"lat\" or r._field == \"lon\" or r._field == \"rsrp\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.lat and exists r.lon and exists r.rsrp)\n  |> group()\n  |> keep(columns: [\"_time\", \"lat\", \"lon\", \"rsrp\", \"band\", \"op\", \"deviceModel\", \"testerName\"])"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P7C70A67DE99A08E6"
+          },
+          "query": "from(bucket: \"grid_cache\")\n  |> range(start: -3d)\n  |> filter(fn: (r) => r._measurement == \"grid_rsrp\")\n  |> filter(fn: (r) => r.op == \"Jio\")\n  |> filter(fn: (r) => r.gridSize == \"${gridSize}\")\n  |> filter(fn: (r) => r._field == \"rsrp\" or r._field == \"samples\")\n  |> last()\n  |> group(columns: [\"cellLat\", \"cellLon\"])\n  |> pivot(rowKey: [\"cellLat\", \"cellLon\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => r.samples >= float(v: ${minSamples}))\n  |> map(fn: (r) => ({r with\n      lat: float(v: r.cellLat), lon: float(v: r.cellLon),\n      quality: if r.rsrp >= -90.0 then \"strong\"\n               else if r.rsrp >= -100.0 then \"medium\"\n               else \"poor\"}))\n  |> group()\n  |> keep(columns: [\"lat\", \"lon\", \"rsrp\", \"samples\", \"quality\"])"
         }
       ],
       "fieldConfig": {
@@ -155,20 +230,12 @@
                 "value": null
               },
               {
-                "color": "#fc8d59",
-                "value": -110
-              },
-              {
                 "color": "#fee08b",
                 "value": -100
               },
               {
-                "color": "#91bfdb",
-                "value": -90
-              },
-              {
                 "color": "#2c7bb6",
-                "value": -80
+                "value": -90
               }
             ]
           }
@@ -177,10 +244,7 @@
       },
       "options": {
         "view": {
-          "id": "fit",
-          "allLayers": true,
-          "lastOnly": false,
-          "padding": 10,
+          "id": "coords",
           "lat": 28.5465,
           "lon": 77.1885,
           "zoom": 15
@@ -201,7 +265,38 @@
         "layers": [
           {
             "type": "markers",
-            "name": "Where the phones are now \u2014 RSRP",
+            "name": "Region quality (all data)",
+            "tooltip": true,
+            "filterData": {
+              "id": "byRefId",
+              "options": "B"
+            },
+            "location": {
+              "mode": "coords",
+              "latitude": "lat",
+              "longitude": "lon"
+            },
+            "config": {
+              "showLegend": false,
+              "style": {
+                "size": {
+                  "fixed": 12
+                },
+                "color": {
+                  "field": "rsrp",
+                  "fixed": "dark-green"
+                },
+                "opacity": 0.6,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/square.svg"
+                }
+              }
+            }
+          },
+          {
+            "type": "markers",
+            "name": "Live phones",
             "tooltip": true,
             "location": {
               "mode": "coords",
@@ -224,6 +319,302 @@
                   "fixed": "img/icons/marker/circle.svg"
                 }
               }
+            },
+            "filterData": {
+              "id": "byRefId",
+              "options": "A"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "type": "geomap",
+      "title": "Vi \u2014 regions + live phones",
+      "description": "Squares: $gridSize cells coloured by the median RSRP of all Vi data so far (precomputed every 30 min; hover for median, quality class and 30 s-window count; cells with fewer than $minSamples windows are hidden). Dots: live samples from the dashboard time range, up to ~1 min behind the phone.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P7C70A67DE99A08E6"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 4,
+        "w": 8,
+        "h": 14
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P7C70A67DE99A08E6"
+          },
+          "query": "from(bucket: \"network_logs_v2\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_log\")\n  |> filter(fn: (r) => r.op == \"Vi\")\n  |> filter(fn: (r) => r.deviceId =~ /^${deviceId:regex}$/)\n  |> filter(fn: (r) => r._field == \"lat\" or r._field == \"lon\" or r._field == \"rsrp\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.lat and exists r.lon and exists r.rsrp)\n  |> group()\n  |> keep(columns: [\"_time\", \"lat\", \"lon\", \"rsrp\", \"band\", \"op\", \"deviceModel\", \"testerName\"])"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P7C70A67DE99A08E6"
+          },
+          "query": "from(bucket: \"grid_cache\")\n  |> range(start: -3d)\n  |> filter(fn: (r) => r._measurement == \"grid_rsrp\")\n  |> filter(fn: (r) => r.op == \"Vi\")\n  |> filter(fn: (r) => r.gridSize == \"${gridSize}\")\n  |> filter(fn: (r) => r._field == \"rsrp\" or r._field == \"samples\")\n  |> last()\n  |> group(columns: [\"cellLat\", \"cellLon\"])\n  |> pivot(rowKey: [\"cellLat\", \"cellLon\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => r.samples >= float(v: ${minSamples}))\n  |> map(fn: (r) => ({r with\n      lat: float(v: r.cellLat), lon: float(v: r.cellLon),\n      quality: if r.rsrp >= -90.0 then \"strong\"\n               else if r.rsrp >= -100.0 then \"medium\"\n               else \"poor\"}))\n  |> group()\n  |> keep(columns: [\"lat\", \"lon\", \"rsrp\", \"samples\", \"quality\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dBm",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d7301f",
+                "value": null
+              },
+              {
+                "color": "#fee08b",
+                "value": -100
+              },
+              {
+                "color": "#2c7bb6",
+                "value": -90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "view": {
+          "id": "coords",
+          "lat": 28.5465,
+          "lon": 77.1885,
+          "zoom": 15
+        },
+        "controls": {
+          "showZoom": true,
+          "mouseWheelZoom": true,
+          "showAttribution": true
+        },
+        "basemap": {
+          "type": "default",
+          "name": "Basemap",
+          "config": {}
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "Region quality (all data)",
+            "tooltip": true,
+            "filterData": {
+              "id": "byRefId",
+              "options": "B"
+            },
+            "location": {
+              "mode": "coords",
+              "latitude": "lat",
+              "longitude": "lon"
+            },
+            "config": {
+              "showLegend": false,
+              "style": {
+                "size": {
+                  "fixed": 12
+                },
+                "color": {
+                  "field": "rsrp",
+                  "fixed": "dark-green"
+                },
+                "opacity": 0.6,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/square.svg"
+                }
+              }
+            }
+          },
+          {
+            "type": "markers",
+            "name": "Live phones",
+            "tooltip": true,
+            "location": {
+              "mode": "coords",
+              "latitude": "lat",
+              "longitude": "lon"
+            },
+            "config": {
+              "showLegend": true,
+              "style": {
+                "size": {
+                  "fixed": 4
+                },
+                "color": {
+                  "field": "rsrp",
+                  "fixed": "dark-green"
+                },
+                "opacity": 0.8,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                }
+              }
+            },
+            "filterData": {
+              "id": "byRefId",
+              "options": "A"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "type": "geomap",
+      "title": "Airtel \u2014 regions + live phones",
+      "description": "Squares: $gridSize cells coloured by the median RSRP of all Airtel data so far (precomputed every 30 min; hover for median, quality class and 30 s-window count; cells with fewer than $minSamples windows are hidden). Dots: live samples from the dashboard time range, up to ~1 min behind the phone.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P7C70A67DE99A08E6"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 4,
+        "w": 8,
+        "h": 14
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P7C70A67DE99A08E6"
+          },
+          "query": "from(bucket: \"network_logs_v2\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_log\")\n  |> filter(fn: (r) => r.op =~ /(?i)airtel/)\n  |> filter(fn: (r) => r.deviceId =~ /^${deviceId:regex}$/)\n  |> filter(fn: (r) => r._field == \"lat\" or r._field == \"lon\" or r._field == \"rsrp\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.lat and exists r.lon and exists r.rsrp)\n  |> group()\n  |> keep(columns: [\"_time\", \"lat\", \"lon\", \"rsrp\", \"band\", \"op\", \"deviceModel\", \"testerName\"])"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P7C70A67DE99A08E6"
+          },
+          "query": "from(bucket: \"grid_cache\")\n  |> range(start: -3d)\n  |> filter(fn: (r) => r._measurement == \"grid_rsrp\")\n  |> filter(fn: (r) => r.op == \"Airtel\")\n  |> filter(fn: (r) => r.gridSize == \"${gridSize}\")\n  |> filter(fn: (r) => r._field == \"rsrp\" or r._field == \"samples\")\n  |> last()\n  |> group(columns: [\"cellLat\", \"cellLon\"])\n  |> pivot(rowKey: [\"cellLat\", \"cellLon\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => r.samples >= float(v: ${minSamples}))\n  |> map(fn: (r) => ({r with\n      lat: float(v: r.cellLat), lon: float(v: r.cellLon),\n      quality: if r.rsrp >= -90.0 then \"strong\"\n               else if r.rsrp >= -100.0 then \"medium\"\n               else \"poor\"}))\n  |> group()\n  |> keep(columns: [\"lat\", \"lon\", \"rsrp\", \"samples\", \"quality\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dBm",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d7301f",
+                "value": null
+              },
+              {
+                "color": "#fee08b",
+                "value": -100
+              },
+              {
+                "color": "#2c7bb6",
+                "value": -90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "view": {
+          "id": "coords",
+          "lat": 28.5465,
+          "lon": 77.1885,
+          "zoom": 15
+        },
+        "controls": {
+          "showZoom": true,
+          "mouseWheelZoom": true,
+          "showAttribution": true
+        },
+        "basemap": {
+          "type": "default",
+          "name": "Basemap",
+          "config": {}
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "Region quality (all data)",
+            "tooltip": true,
+            "filterData": {
+              "id": "byRefId",
+              "options": "B"
+            },
+            "location": {
+              "mode": "coords",
+              "latitude": "lat",
+              "longitude": "lon"
+            },
+            "config": {
+              "showLegend": false,
+              "style": {
+                "size": {
+                  "fixed": 12
+                },
+                "color": {
+                  "field": "rsrp",
+                  "fixed": "dark-green"
+                },
+                "opacity": 0.6,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/square.svg"
+                }
+              }
+            }
+          },
+          {
+            "type": "markers",
+            "name": "Live phones",
+            "tooltip": true,
+            "location": {
+              "mode": "coords",
+              "latitude": "lat",
+              "longitude": "lon"
+            },
+            "config": {
+              "showLegend": true,
+              "style": {
+                "size": {
+                  "fixed": 4
+                },
+                "color": {
+                  "field": "rsrp",
+                  "fixed": "dark-green"
+                },
+                "opacity": 0.8,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                }
+              }
+            },
+            "filterData": {
+              "id": "byRefId",
+              "options": "A"
             }
           }
         ]
@@ -239,10 +630,10 @@
         "uid": "P7C70A67DE99A08E6"
       },
       "gridPos": {
-        "x": 14,
-        "y": 4,
-        "w": 10,
-        "h": 9
+        "x": 0,
+        "y": 18,
+        "w": 12,
+        "h": 8
       },
       "targets": [
         {
@@ -279,20 +670,12 @@
                 "value": null
               },
               {
-                "color": "#fc8d59",
-                "value": -110
-              },
-              {
                 "color": "#fee08b",
                 "value": -100
               },
               {
-                "color": "#91bfdb",
-                "value": -90
-              },
-              {
                 "color": "#2c7bb6",
-                "value": -80
+                "value": -90
               }
             ]
           }
@@ -319,10 +702,10 @@
         "uid": "P7C70A67DE99A08E6"
       },
       "gridPos": {
-        "x": 14,
-        "y": 13,
-        "w": 10,
-        "h": 9
+        "x": 12,
+        "y": 18,
+        "w": 12,
+        "h": 8
       },
       "targets": [
         {

@@ -13,7 +13,7 @@ changed; these scripts only read the listener, its loaders and the dashboard JSO
     ├── grafana/           Grafana 13.2.2 binary + data        port 3300, campus view-only
     ├── venv/              Python packages for the listener
     ├── secrets/           Firestore key, InfluxDB token, passwords
-    ├── logs/              influxdb.log, grafana.log, listener.log, cron.log
+    ├── logs/              influxdb.log, grafana.log, listener.log, grid.log, cron.log
     └── config.env         proxy and ports
 ```
 
@@ -91,12 +91,19 @@ Port 3300 doesn't clash with the Mac's own Grafana on 3000, so both can be open 
 |---|---|
 | `server/nl.sh status` | Which services run + the listener's last lines |
 | `server/nl.sh logs listener` | Follow the listener (a line per batch received); Ctrl+C to stop watching |
-| `server/nl.sh restart listener` | After copying a new `firestore_listener.py` |
+| `server/nl.sh restart listener` | After copying a new `firestore_listener.py`; costs a full Firestore re-read, see below |
+| `server/nl.sh logs grid` | Follow the grid builder (a line per rebuild, every 30 min) |
+| `server/nl.sh restart grid` | After copying a new `grid_builder.py`; also forces an immediate rebuild |
 | `server/nl.sh stop` / `start` | Everything (cron will restart stopped services within 5 min — run `uninstall-cron` first to keep them stopped) |
 | `server/nl.sh uninstall-cron` | Stop the automatic restarts |
 
 To update after changing code or dashboards on the Mac: re-run the `rsync` from step 2, then
-`server/nl.sh restart listener` (Grafana picks up dashboard JSON changes by itself within 30 s).
+`server/nl.sh restart grid` (Grafana picks up dashboard JSON changes by itself within 30 s). The
+Live map squares come from `grid_builder.py`, which creates its own `grid_cache` bucket (72 h
+retention) on first run.
+
+Restart the listener only when `firestore_listener.py` changed in a way you need: every restart
+re-reads all Firestore documents (53k on 5 Nov), which is more than the 50k/day free read quota.
 
 ## If something fails
 

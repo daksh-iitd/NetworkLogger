@@ -192,6 +192,9 @@ else
   printf '\n\033[33mNo Firestore key yet: copy it to %s and run: server/nl.sh start listener\033[0m\n' "$RT/secrets/firestore-key.json"
 fi
 
+say "Starting the grid builder"
+"$SERVER_DIR/nl.sh" start grid
+
 # ── 7. Cron watchdog ─────────────────────────────────────────────────────────
 say "Installing cron watchdog (restarts anything that stopped, also after a reboot)"
 "$SERVER_DIR/nl.sh" install-cron \

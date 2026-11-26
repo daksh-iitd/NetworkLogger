@@ -156,3 +156,23 @@ needs the `*firebase-adminsdk*.json` key in the repo root:
   Storage have no session status.
 - "Restarted by Android" on the Motorola is inferred from the screen being off when sessions
   started, not logged directly.
+
+## Per-device comparison around IITD
+
+`device_comparison/` compares phones by RSRP (and RSRQ) on and around the IIT Delhi campus
+(box 28.538–28.5515 N, 77.1795–77.2015 E; ~94% of all samples), using both the old Storage
+CSVs and the Firestore samples, with Jio, Vi and Airtel:
+
+```bash
+../grafana_pipeline/venv/bin/python device_comparison/export_firestore_points.py   # → data/ (git-ignored)
+./venv/bin/python device_comparison/make_device_comparison.py
+```
+
+- `tables/device_overall_stats.csv` — n, hours, days, mean, SD, median, min, max per phone
+- `tables/device_slot_stats.csv` — the same per 2-hour slot of the day (IST, all days pooled)
+- `tables/device_window_stats.csv` — the same per consecutive 2-hour window (date + slot)
+- `charts/01_rsrp_by_slot_heatmap.png`, `02_rsrp_by_device.png`, `03_iitd_area.png`
+
+Phones were in different parts of campus at different times, and Jio is mostly 5G (SS-RSRP),
+so differences mix phone, place and operator; compare phones within one operator.
+

@@ -154,7 +154,10 @@ def main():
     args = parser.parse_args()
 
     db = firestore.Client.from_service_account_json(args.key or find_key(), database=DATABASE_ID)
-    influx = InfluxDBClient(url=args.influx_url, token=args.influx_token or find_token(), org=INFLUX_ORG)
+    # 30 s timeout: the default 10 s drops batches whenever InfluxDB is briefly busy
+    # (e.g. a grid_builder.py rebuild); better to wait out the spike than lose points
+    influx = InfluxDBClient(url=args.influx_url, token=args.influx_token or find_token(), org=INFLUX_ORG,
+                            timeout=30_000)
     write_api = influx.write_api(write_options=SYNCHRONOUS)
     sessions = SessionCache()
     initial = {"batches": True, "background": True}

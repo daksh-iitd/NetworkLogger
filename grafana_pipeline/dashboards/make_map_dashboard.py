@@ -1,7 +1,8 @@
 """
-Builds the "NetworkLogger Map" Grafana dashboard (Geomap panels on the network_logs_v2
-bucket) and writes it next to this script. Copy the JSON into Grafana's provisioned
-dashboards folder (/opt/homebrew/etc/grafana/dashboards) to install or update it.
+Builds the "NetworkLogger Map", "NetworkLogger Live" and "NetworkLogger Coverage Grid"
+Grafana dashboards (Geomap/timeseries panels on the network_logs_v2 bucket) and writes
+them next to this script. Copy the JSON into Grafana's provisioned dashboards folder
+(/opt/homebrew/etc/grafana/dashboards) to install or update them.
 
     python dashboards/make_map_dashboard.py
 """
@@ -13,13 +14,11 @@ DS = {"type": "influxdb", "uid": "P7C70A67DE99A08E6"}
 BUCKET = "network_logs_v2"
 CENTER = {"lat": 28.5465, "lon": 77.1885, "zoom": 15}
 
-# Same five classes as the app's signal labels and the presentation maps
+# Three classes, merged from the app's five signal labels
 RSRP_STEPS = [
-    {"color": "#d7301f", "value": None},   # very weak  < −110
-    {"color": "#fc8d59", "value": -110},   # weak
+    {"color": "#d7301f", "value": None},   # poor    < −100
     {"color": "#fee08b", "value": -100},   # medium
-    {"color": "#91bfdb", "value": -90},    # strong
-    {"color": "#2c7bb6", "value": -80},    # very strong ≥ −80
+    {"color": "#2c7bb6", "value": -90},    # strong  ≥ −90
 ]
 # Band colour = frequency range, as in the presentation charts
 BAND_COLORS = {"B5": "#eb6834", "B8": "#eb6834", "n28": "#eb6834",
@@ -103,7 +102,7 @@ def variable(name, label, tag, regex=None):
 
 panels = [
     geomap(1, "RSRP — Jio",
-           "Every Jio sample, coloured by serving-cell RSRP (same classes as the app's signal labels). Jio values are "
+           "Every Jio sample, coloured by serving-cell RSRP (poor < −100, medium, strong ≥ −90 dBm). Jio values are "
            "mostly 5G SS-RSRP, a few dB below LTE RSRP by definition.",
            query('r.op == "Jio"'), "rsrp", {"x": 0, "y": 0, "w": 12, "h": 17}, rsrp_field_config),
     geomap(2, "RSRP — Vi",
@@ -125,7 +124,7 @@ dashboard = {
     "time": {"from": "now-45d", "to": "now"},
     "refresh": "",
     "templating": {"list": [
-        variable("op", "Operator", "op", regex="/^(Jio|Vi)$/"),
+        variable("op", "Operator", "op", regex="/^(Jio|Vi|.*[Aa]irtel.*)$/"),
         variable("band", "Band", "band"),
         variable("deviceId", "Device", "deviceId"),
     ]},
@@ -162,13 +161,9 @@ def timeseries(pid, title, description, q, unit, grid, display_name, thresholds=
                         "tooltip": {"mode": "multi"}}}
 
 
-live_map = geomap(
-    1, "Where the phones are now — RSRP",
-    "Every sample in the time range, coloured by RSRP. Phones send a batch every minute, so the newest "
-    "points are up to ~1 minute old.",
-    query('true', keep=("_time", "lat", "lon", "rsrp", "band", "op", "deviceModel", "testerName"), band_filter=False),
-    "rsrp", {"x": 0, "y": 4, "w": 14, "h": 18}, rsrp_field_config)
-live_map["options"]["view"] = {"id": "fit", "allLayers": True, "lastOnly": False, "padding": 10, **CENTER}
+# The three per-operator maps (grid squares + live points) are inserted below, after
+# the grid helpers are defined. Fixed-coords views on purpose: a "fit" view re-fits
+# (zooms out) on every 10 s refresh, throwing away the user's pan/zoom.
 
 latest_rsrp = {
     "id": 2, "type": "stat", "title": "Latest RSRP per phone",
@@ -185,14 +180,13 @@ latest_rsrp = {
 
 live_panels = [
     latest_rsrp,
-    live_map,
     timeseries(3, "RSRP", "Serving-cell RSRP per phone.",
                series_query(["rsrp"], ["deviceModel", "testerName"]), "dBm",
-               {"x": 14, "y": 4, "w": 10, "h": 9},
+               {"x": 0, "y": 18, "w": 12, "h": 8},
                "${__field.labels.deviceModel} (${__field.labels.testerName})", RSRP_STEPS),
     timeseries(4, "Throughput", "Device DL/UL throughput, excluding the app's own uploads.",
                series_query(["dlKbps", "ulKbps"], ["deviceModel", "_field"]), "Kbits",
-               {"x": 14, "y": 13, "w": 10, "h": 9},
+               {"x": 12, "y": 18, "w": 12, "h": 8},
                "${__field.labels.deviceModel} ${__field.labels._field}"),
 ]
 
@@ -208,8 +202,180 @@ live_dashboard = {
     "panels": live_panels,
 }
 
+# ── Coverage-grid dashboard: median RSRP per lat/lon cell, one panel per operator ──
+# Bins every sample into a square of $gridSize degrees, takes the median RSRP of the
+# cell (median, not mean: robust against the odd -140 dBm glitch and against one phone
+# sitting in a basement) and colours the cell with the same three classes as the point
+# maps. $minSamples hides cells a phone only drove through once or twice.
+
+def grid_query(op_filter, start="v.timeRangeStart", stop="v.timeRangeStop"):
+    return f'''base = from(bucket: "{BUCKET}")
+  |> range(start: {start}, stop: {stop})
+  |> filter(fn: (r) => r._measurement == "network_log")
+  |> filter(fn: (r) => {op_filter})
+  |> filter(fn: (r) => r.deviceId =~ /^${{deviceId:regex}}$/)
+  |> filter(fn: (r) => r._field == "lat" or r._field == "lon" or r._field == "rsrp")
+  |> aggregateWindow(every: 30s, fn: mean, createEmpty: false)
+  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+  |> filter(fn: (r) => exists r.lat and exists r.lon and exists r.rsrp)
+  |> map(fn: (r) => ({{r with
+      cellLat: string(v: (float(v: int(v: r.lat / ${{gridSize}})) + 0.5) * ${{gridSize}}),
+      cellLon: string(v: (float(v: int(v: r.lon / ${{gridSize}})) + 0.5) * ${{gridSize}})}}))
+  |> group(columns: ["cellLat", "cellLon"])
+
+med = base |> median(column: "rsrp")
+cnt = base |> count(column: "rsrp") |> rename(columns: {{rsrp: "samples"}})
+
+join(tables: {{med: med, cnt: cnt}}, on: ["cellLat", "cellLon"])
+  |> filter(fn: (r) => r.samples >= ${{minSamples}})
+  |> map(fn: (r) => ({{r with
+      lat: float(v: r.cellLat), lon: float(v: r.cellLon),
+      quality: if r.rsrp >= -90.0 then "strong"
+               else if r.rsrp >= -100.0 then "medium"
+               else "poor"}}))
+  |> group()
+  |> drop(columns: ["cellLat", "cellLon"])'''
+
+
+def grid_panel(pid, op_name, op_filter, grid):
+    fc = {
+        "defaults": {"unit": "dBm", "decimals": 1, "color": {"mode": "thresholds"},
+                     "thresholds": {"mode": "absolute", "steps": RSRP_STEPS}},
+        "overrides": [
+            {"matcher": {"id": "byName", "options": c},
+             "properties": [{"id": "custom.hideFrom",
+                             "value": {"tooltip": True, "viz": False, "legend": False}}]}
+            for c in ("lat", "lon")
+        ],
+    }
+    p = geomap(pid, f"{op_name} — median RSRP per cell",
+               f"Each square is one $gridSize°-wide grid cell; its colour is the median RSRP of every "
+               f"{op_name} sample inside it in the time range (hover for the value, the quality class and "
+               f"the sample count). Cells with fewer than $minSamples samples are hidden.",
+               grid_query(op_filter), "rsrp", grid, fc)
+    p["options"]["layers"][0]["config"]["style"] |= {
+        "size": {"fixed": 12}, "opacity": 0.75,
+        "symbol": {"mode": "fixed", "fixed": "img/icons/marker/square.svg"},
+    }
+    return p
+
+
+def custom_variable(name, label, options, default):
+    return {
+        "name": name, "label": label, "type": "custom", "multi": False, "includeAll": False,
+        "query": ", ".join(f"{t} : {v}" for t, v in options),
+        "options": [{"text": t, "value": v, "selected": v == default} for t, v in options],
+        "current": {"selected": True,
+                    "text": next(t for t, v in options if v == default), "value": default},
+    }
+
+
+GRID_OPS = [("Jio", 'r.op == "Jio"'),
+            ("Vi", 'r.op == "Vi"'),
+            # listener normalises Airtel from 31 Oct; the regex also catches older raw names
+            ("Airtel", 'r.op =~ /(?i)airtel/')]
+
+grid_dashboard = {
+    "uid": "networklogger-grid",
+    "title": "NetworkLogger Coverage Grid",
+    "tags": ["networklogger", "map", "grid"],
+    "timezone": "browser",
+    "schemaVersion": 39,
+    "time": {"from": "now-45d", "to": "now"},
+    "refresh": "",
+    "templating": {"list": [
+        custom_variable("gridSize", "Grid size",
+                        [("27 m", "0.00025"), ("55 m", "0.0005"),
+                         ("110 m", "0.001"), ("220 m", "0.002")], "0.0005"),
+        custom_variable("minSamples", "Min samples/cell",
+                        [("1", "1"), ("3", "3"), ("5", "5"), ("10", "10"), ("20", "20")], "3"),
+        variable("deviceId", "Device", "deviceId"),
+    ]},
+    "panels": [grid_panel(i + 1, op, flt, {"x": 8 * i, "y": 0, "w": 8, "h": 18})
+               for i, (op, flt) in enumerate(GRID_OPS)],
+}
+
+
+# ── Live per-operator maps: precomputed region grid + live phones ──
+# The region squares come from the "grid_cache" bucket, which ../grid_builder.py
+# rebuilds every 30 min from *all* data so far (op names already
+# normalised there, samples = 30 s windows per phone). Looking the cells up costs
+# milliseconds; recomputing them from raw samples took ~6 s per operator and made the
+# dashboard buffer for ~15 s on every load. $deviceId only filters the live dots and
+# time series, not the precomputed squares.
+
+def grid_lookup_query(op_name):
+    # -3d lookback + last(): normally the newest cells are minutes old, but if the Mac
+    # sleeps and the task misses runs, the maps keep showing the last computed grid
+    # instead of going blank (grid_cache retention is 72 h to match)
+    return f'''from(bucket: "grid_cache")
+  |> range(start: -3d)
+  |> filter(fn: (r) => r._measurement == "grid_rsrp")
+  |> filter(fn: (r) => r.op == "{op_name}")
+  |> filter(fn: (r) => r.gridSize == "${{gridSize}}")
+  |> filter(fn: (r) => r._field == "rsrp" or r._field == "samples")
+  |> last()
+  |> group(columns: ["cellLat", "cellLon"])
+  |> pivot(rowKey: ["cellLat", "cellLon"], columnKey: ["_field"], valueColumn: "_value")
+  |> filter(fn: (r) => r.samples >= float(v: ${{minSamples}}))
+  |> map(fn: (r) => ({{r with
+      lat: float(v: r.cellLat), lon: float(v: r.cellLon),
+      quality: if r.rsrp >= -90.0 then "strong"
+               else if r.rsrp >= -100.0 then "medium"
+               else "poor"}}))
+  |> group()
+  |> keep(columns: ["lat", "lon", "rsrp", "samples", "quality"])'''
+
+
+def live_op_map(pid, op_name, points_filter, grid):
+    p = geomap(pid, f"{op_name} — regions + live phones",
+               f"Squares: $gridSize cells coloured by the median RSRP of all {op_name} data so far "
+               f"(precomputed every 30 min; hover for median, quality class and 30 s-window count; cells "
+               f"with fewer than $minSamples windows are hidden). Dots: live samples from the dashboard "
+               f"time range, up to ~1 min behind the phone.",
+               query(points_filter, keep=("_time", "lat", "lon", "rsrp", "band", "op", "deviceModel", "testerName"),
+                     band_filter=False),
+               "rsrp", grid, rsrp_field_config)
+    p["targets"].append({"refId": "B", "datasource": DS, "query": grid_lookup_query(op_name)})
+    points_layer = p["options"]["layers"][0]
+    points_layer["name"] = "Live phones"
+    points_layer["filterData"] = {"id": "byRefId", "options": "A"}
+    p["options"]["layers"].insert(0, {
+        "type": "markers", "name": "Region quality (all data)", "tooltip": True,
+        "filterData": {"id": "byRefId", "options": "B"},
+        "location": {"mode": "coords", "latitude": "lat", "longitude": "lon"},
+        "config": {
+            "showLegend": False,  # same classes as the points layer, one legend is enough
+            "style": {
+                "size": {"fixed": 12},
+                "color": {"field": "rsrp", "fixed": "dark-green"},
+                "opacity": 0.6,
+                "symbol": {"mode": "fixed", "fixed": "img/icons/marker/square.svg"},
+            },
+        },
+    })
+    return p
+
+
+LIVE_OPS = [("Jio", 'r.op == "Jio"'),
+            ("Vi", 'r.op == "Vi"'),
+            ("Airtel", 'r.op =~ /(?i)airtel/')]
+for i, (op_name, flt) in enumerate(LIVE_OPS):
+    live_panels.insert(1 + i, live_op_map(10 + i, op_name, flt,
+                                          {"x": 8 * i, "y": 4, "w": 8, "h": 14}))
+
+live_dashboard["templating"]["list"] = [
+    custom_variable("gridSize", "Grid size",
+                    [("27 m", "0.00025"), ("55 m", "0.0005"),
+                     ("110 m", "0.001"), ("220 m", "0.002")], "0.0005"),
+    custom_variable("minSamples", "Min windows/cell",
+                    [("1", "1"), ("3", "3"), ("5", "5"), ("10", "10"), ("20", "20")], "3"),
+    variable("deviceId", "Device", "deviceId"),
+]
+
 here = os.path.dirname(os.path.abspath(__file__))
-for name, board in [("network_logger_map.json", dashboard), ("network_logger_live.json", live_dashboard)]:
+for name, board in [("network_logger_map.json", dashboard), ("network_logger_live.json", live_dashboard),
+                    ("network_logger_grid.json", grid_dashboard)]:
     out = os.path.join(here, name)
     with open(out, "w") as f:
         json.dump(board, f, indent=2)
