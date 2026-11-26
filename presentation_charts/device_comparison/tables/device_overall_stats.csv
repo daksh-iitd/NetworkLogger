@@ -1,0 +1,31 @@
+metric,phone,op,n,hours,mean,sd,median,min,max,first_day,last_day,days,pct_5g_sa
+rsrp,CPH2423 · Airtel,Airtel,4193.0,5.8,-104.8,6.7,-106.0,-122.0,-65.0,26 Oct,27 Oct,2,0.0
+rsrp,Infinix X6525 · Jio,Jio,89.0,0.1,-108.0,5.5,-108.0,-115.0,-83.0,07 Sep,07 Sep,1,0.0
+rsrp,Moto g35 5G · Vi,Vi,6472.0,9.0,-90.2,3.1,-91.0,-123.0,-77.0,08 Oct,27 Oct,8,0.0
+rsrp,Motorola Edge 50 Neo · Jio,Jio,5755.0,8.0,-99.0,9.6,-98.0,-129.0,-63.0,09 Sep,27 Oct,6,70.0
+rsrp,Nothing A001 · Vi,Vi,8596.0,11.9,-88.8,5.9,-90.0,-116.0,-62.0,09 Oct,17 Oct,6,0.0
+rsrp,OnePlus 11R · Jio,Jio,10707.0,14.9,-105.6,8.2,-106.0,-126.0,-70.0,01 Sep,24 Sep,16,61.0
+rsrp,OnePlus 11R · Vi,Vi,7206.0,10.0,-95.6,7.9,-94.0,-130.0,-69.0,01 Sep,24 Sep,13,0.0
+rsrp,Samsung Galaxy A34 5G · Airtel,Airtel,4035.0,5.6,-88.2,13.0,-84.0,-133.0,-65.0,26 Oct,26 Oct,1,0.0
+rsrp,Samsung Galaxy M32 · Vi,Vi,115718.0,160.7,-95.2,10.3,-93.0,-135.0,-54.0,25 Aug,27 Oct,29,0.0
+rsrp,Samsung Galaxy S22 Ultra · Jio,Jio,3495.0,4.9,-95.4,7.4,-93.0,-119.0,-77.0,26 Oct,26 Oct,1,80.0
+rsrp,Samsung Galaxy S24 FE · Airtel,Airtel,8918.0,12.4,-103.1,5.5,-102.0,-132.0,-74.0,26 Oct,27 Oct,2,0.0
+rsrp,Samsung Galaxy S24 · Airtel,Airtel,5801.0,8.1,-98.9,7.9,-96.0,-123.0,-81.0,26 Oct,27 Oct,2,0.0
+rsrp,Xiaomi 2201116SI · Vi,Vi,6120.0,8.5,-96.7,5.4,-99.0,-107.0,-66.0,08 Sep,16 Oct,4,0.0
+rsrp,Xiaomi 2201117PI · Jio,Jio,3642.0,5.1,-113.8,6.6,-115.0,-129.0,-91.0,26 Oct,26 Oct,1,0.0
+rsrp,Xiaomi 2201117PI · Vi,Vi,3.0,0.0,-104.3,9.8,-110.0,-110.0,-93.0,26 Oct,26 Oct,1,0.0
+rsrq,CPH2423 · Airtel,Airtel,4193.0,5.8,-11.7,2.5,-12.0,-20.0,-4.0,26 Oct,27 Oct,2,0.0
+rsrq,Infinix X6525 · Jio,Jio,89.0,0.1,-9.6,4.5,-7.0,-23.0,-6.0,07 Sep,07 Sep,1,0.0
+rsrq,Moto g35 5G · Vi,Vi,6470.0,9.0,-11.1,1.5,-11.0,-15.0,-6.0,08 Oct,27 Oct,8,0.0
+rsrq,Motorola Edge 50 Neo · Jio,Jio,5755.0,8.0,-11.5,2.8,-12.0,-20.0,-3.0,09 Sep,27 Oct,6,70.0
+rsrq,Nothing A001 · Vi,Vi,8596.0,11.9,-8.9,2.4,-8.0,-20.0,-3.0,09 Oct,17 Oct,6,0.0
+rsrq,OnePlus 11R · Jio,Jio,10707.0,14.9,-13.7,2.3,-13.0,-20.0,-6.0,01 Sep,24 Sep,16,61.0
+rsrq,OnePlus 11R · Vi,Vi,7206.0,10.0,-10.2,2.0,-10.0,-19.0,-6.0,01 Sep,24 Sep,13,0.0
+rsrq,Samsung Galaxy A34 5G · Airtel,Airtel,4035.0,5.6,-11.4,2.3,-11.0,-20.0,-3.0,26 Oct,26 Oct,1,0.0
+rsrq,Samsung Galaxy M32 · Vi,Vi,119637.0,166.2,-11.3,3.1,-11.0,-20.0,0.0,25 Aug,27 Oct,29,0.0
+rsrq,Samsung Galaxy S22 Ultra · Jio,Jio,3495.0,4.9,-11.9,1.3,-12.0,-18.0,-5.0,26 Oct,26 Oct,1,80.0
+rsrq,Samsung Galaxy S24 FE · Airtel,Airtel,8918.0,12.4,-8.6,2.7,-9.0,-21.0,-3.0,26 Oct,27 Oct,2,0.0
+rsrq,Samsung Galaxy S24 · Airtel,Airtel,5801.0,8.1,-8.5,1.6,-8.0,-17.0,-3.0,26 Oct,27 Oct,2,0.0
+rsrq,Xiaomi 2201116SI · Vi,Vi,6120.0,8.5,-10.0,2.1,-10.0,-19.0,-6.0,08 Sep,16 Oct,4,0.0
+rsrq,Xiaomi 2201117PI · Jio,Jio,3642.0,5.1,-14.6,2.8,-15.0,-20.0,-3.0,26 Oct,26 Oct,1,0.0
+rsrq,Xiaomi 2201117PI · Vi,Vi,3.0,0.0,-13.3,1.2,-14.0,-14.0,-12.0,26 Oct,26 Oct,1,0.0

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Start/stop/check the server pipeline (InfluxDB, Grafana, Firestore listener).
+# Start/stop/check the server pipeline (InfluxDB, Grafana, Firestore listener, grid builder).
 #
 #   server/nl.sh status                 what's running
-#   server/nl.sh start|stop|restart [influxdb|grafana|listener]   (default: all)
+#   server/nl.sh start|stop|restart [influxdb|grafana|listener|grid]   (default: all)
 #   server/nl.sh ensure                 start whatever isn't running (used by cron)
 #   server/nl.sh logs <service>         follow a service's log
 #   server/nl.sh load-history           load the old Storage CSVs (grafana_pipeline/firebase_csv_mirror)
@@ -13,7 +13,7 @@ SERVER_DIR=$(cd "$(dirname "$0")" && pwd)
 APP_DIR=$(dirname "$SERVER_DIR")
 PIPELINE="$APP_DIR/grafana_pipeline"
 RT="$APP_DIR/runtime"
-SERVICES=(influxdb grafana listener)
+SERVICES=(influxdb grafana listener grid)
 
 [ -f "$RT/config.env" ] || { echo "Not set up yet — run server/setup.sh first" >&2; exit 1; }
 # shellcheck disable=SC1091
@@ -37,6 +37,7 @@ is_running() {
     influxdb) grep -q influxd "/proc/$pid/cmdline" ;;
     grafana)  grep -q grafana "/proc/$pid/cmdline" ;;
     listener) grep -q firestore_listener "/proc/$pid/cmdline" ;;
+    grid)     grep -q grid_builder "/proc/$pid/cmdline" ;;
   esac
 }
 
@@ -82,6 +83,12 @@ start_one() {
       sleep 5
       is_running listener || { echo "listener: exited at start, see $RT/logs/listener.log"; tail -5 "$RT/logs/listener.log"; return 1; }
       ;;
+    grid)
+      is_running influxdb || start_one influxdb || return 1
+      launch grid "$RT/logs/grid.log" "$RT/venv/bin/python" -u "$PIPELINE/grid_builder.py" --influx-url "$INFLUX"
+      sleep 5
+      is_running grid || { echo "grid: exited at start, see $RT/logs/grid.log"; tail -5 "$RT/logs/grid.log"; return 1; }
+      ;;
   esac
   echo "$1: started (pid $(cat "$(pidfile "$1")"))"
 }
@@ -107,6 +114,7 @@ case "${1:-status}" in
       if is_running "$s"; then echo "$s: running (pid $(cat "$(pidfile "$s")"))"; else echo "$s: STOPPED"; fi
     done
     echo "listener last lines:"; tail -3 "$RT/logs/listener.log" 2>/dev/null | sed 's/^/  /'
+    echo "grid last lines:"; tail -2 "$RT/logs/grid.log" 2>/dev/null | sed 's/^/  /'
     ;;
   start)   for s in $(targets "${2:-}"); do start_one "$s"; done ;;
   stop)    for s in $(targets "${2:-}"); do stop_one "$s"; done ;;
@@ -120,8 +128,8 @@ case "${1:-status}" in
     ;;
   logs)
     case "${2:-}" in
-      influxdb|grafana|listener) tail -n 50 -f "$RT/logs/$2.log" ;;
-      *) echo "usage: $0 logs influxdb|grafana|listener"; exit 1 ;;
+      influxdb|grafana|listener|grid) tail -n 50 -f "$RT/logs/$2.log" ;;
+      *) echo "usage: $0 logs influxdb|grafana|listener|grid"; exit 1 ;;
     esac
     ;;
   load-history)

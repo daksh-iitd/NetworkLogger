@@ -37,7 +37,7 @@
             "$__all"
           ]
         },
-        "regex": "/^(Jio|Vi)$/"
+        "regex": "/^(Jio|Vi|.*[Aa]irtel.*)$/"
       },
       {
         "name": "band",
@@ -94,7 +94,7 @@
       "id": 1,
       "type": "geomap",
       "title": "RSRP \u2014 Jio",
-      "description": "Every Jio sample, coloured by serving-cell RSRP (same classes as the app's signal labels). Jio values are mostly 5G SS-RSRP, a few dB below LTE RSRP by definition.",
+      "description": "Every Jio sample, coloured by serving-cell RSRP (poor < \u2212100, medium, strong \u2265 \u221290 dBm). Jio values are mostly 5G SS-RSRP, a few dB below LTE RSRP by definition.",
       "datasource": {
         "type": "influxdb",
         "uid": "P7C70A67DE99A08E6"
@@ -130,20 +130,12 @@
                 "value": null
               },
               {
-                "color": "#fc8d59",
-                "value": -110
-              },
-              {
                 "color": "#fee08b",
                 "value": -100
               },
               {
-                "color": "#91bfdb",
-                "value": -90
-              },
-              {
                 "color": "#2c7bb6",
-                "value": -80
+                "value": -90
               }
             ]
           }
@@ -241,20 +233,12 @@
                 "value": null
               },
               {
-                "color": "#fc8d59",
-                "value": -110
-              },
-              {
                 "color": "#fee08b",
                 "value": -100
               },
               {
-                "color": "#91bfdb",
-                "value": -90
-              },
-              {
                 "color": "#2c7bb6",
-                "value": -80
+                "value": -90
               }
             ]
           }

@@ -1,0 +1,2 @@
+# Exported app data (testers' GPS tracks); regenerate with export_firestore_points.py
+data/

@@ -114,11 +114,15 @@ def operator_of(row):
         return "Jio"
     if mnc in ("11", "011"):
         return "Vi"
+    if mcc == "404" and mnc in ("10", "010", "93", "093"):
+        return "Airtel"
     name = (row.get("operator") or "").lower()
     if "jio" in name:
         return "Jio"
     if name.startswith("vi") or "vodafone" in name:
         return "Vi"
+    if "airtel" in name:
+        return "Airtel"
     return row.get("operator") or "Unknown"
 
 
